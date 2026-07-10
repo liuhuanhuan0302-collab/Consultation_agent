@@ -6,10 +6,9 @@
   2. GET  /questions       → 获取 10 模块 68 题
   3. POST /leads           → 填写企业信息，拿到 submission_id
   4. PUT  /submissions/{}/draft → 答题中随时保存草稿
-  5. POST /submissions/{}/submit → 提交全部 68 题，系统评分 + AI 生成报告
-  6. GET  /reports/{token}       → 查看报告（含分数 + 维度数据）
-  7. GET  /reports/{token}/pdf   → 下载 PDF
-  8. GET  /channels/{code}/qr    → 获取渠道二维码图片
+  5. POST /submissions/{}/submit → 提交全部 68 题，规则评分并创建邮件发送任务
+  6. GET  /reports/{token}       → 查看已生成报告（含分数 + 维度数据）
+  7. GET  /channels/{code}/qr    → 获取渠道二维码图片
 """
 
 import json
@@ -37,7 +36,6 @@ from app.schemas import (
     LeadResponse,
     MessageResponse,
     ModuleRead,
-    ReportEmailRequest,
     SessionCreate,
     SessionResponse,
     SubmitQuestionnaireRequest,
@@ -45,8 +43,6 @@ from app.schemas import (
     TrackEventRequest,
 )
 from app.service.diagnosis import active_modules_with_questions, persist_answers, score_submission
-from app.service.email_service import send_report_pdf_email
-from app.service.pdf_service import render_report_pdf_bytes
 from app.service.report_queue import enqueue_report_delivery
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
@@ -237,14 +233,14 @@ def save_draft(submission_id: int, payload: DraftSaveRequest, db: Session = Depe
 
 
 # ══════════════════════════════════════════════════════════════════
-# 2.6 提交问卷 + 评分 + 生成报告
+# 2.6 提交问卷 + 评分 + 创建报告发送任务
 # ══════════════════════════════════════════════════════════════════
 # 方法：POST
 # 路径：/api/public/submissions/{submission_id}/submit
 # 功能：客户提交全部 68 题，系统依次执行：
-#         ① 保存答案 → ② 规则引擎评分 → ③ 调用 DeepSeek AI 生成报告
-#       如果 AI 调用失败，自动回退到模板报告
-#       耗时 5-45 秒（取决于 DeepSeek 响应速度）
+#         ① 保存答案 → ② 规则引擎评分 → ③ 创建报告邮件发送任务
+#       后台 worker 再异步调用 DeepSeek、生成 PDF 并发送邮件；
+#       如果 AI 调用失败，worker 自动回退到模板报告。
 # 鉴权：无
 # 请求：{ answers: [{ question_id, score }...] } — 必须包含全部 68 题
 #       score 范围 0-4
@@ -365,73 +361,8 @@ def public_report(public_token: str, request: Request, db: Session = Depends(get
 
 
 # ══════════════════════════════════════════════════════════════════
-# 2.8 下载报告 PDF
 # ══════════════════════════════════════════════════════════════════
-# 方法：GET
-# 路径：/api/public/reports/{public_token}/pdf
-# 功能：下载诊断报告 PDF 文件（含柱状图 + 雷达图 + 文字稿）
-#       文件名：diagnosis-report-{token}.pdf
-# 鉴权：无
-# 请求：路径参数 public_token
-# 返回：PDF 二进制流（Content-Type: application/pdf）
-@router.get("/api/public/reports/{public_token}/pdf")
-def public_report_pdf(public_token: str, request: Request, db: Session = Depends(get_db)) -> Response:
-    report = get_report_by_public_token(db, public_token)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    write_tracking_event(
-        db,
-        "claim_full_report",
-        session_token=report.submission.lead.session_token,
-        lead_id=report.submission.lead_id,
-        user_agent=request.headers.get("user-agent"),
-        ip_address=client_ip(request),
-    )
-    db.commit()
-    pdf = render_report_pdf_bytes(report)
-    headers = {"Content-Disposition": f'attachment; filename="diagnosis-report-{report.public_token}.pdf"'}
-    return Response(content=pdf, media_type="application/pdf", headers=headers)
-
-
-# ══════════════════════════════════════════════════════════════════
-# 2.8.1 发送报告 PDF 到邮箱
-# ══════════════════════════════════════════════════════════════════
-# 方法：POST
-# 路径：/api/public/reports/{public_token}/email
-# 功能：用户填写邮箱后，系统将 PDF 报告作为附件发送到该邮箱
-# 鉴权：无
-# 请求：{ email: string }
-# 返回：{ message: "report sent" }
-@router.post("/api/public/reports/{public_token}/email", response_model=MessageResponse)
-def email_report_pdf(public_token: str, payload: ReportEmailRequest, request: Request, db: Session = Depends(get_db)) -> MessageResponse:
-    report = get_report_by_public_token(db, public_token)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    pdf = render_report_pdf_bytes(report)
-    try:
-        send_report_pdf_email(
-            str(payload.email),
-            report.title,
-            pdf,
-            f"diagnosis-report-{report.public_token}.pdf",
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    write_tracking_event(
-        db,
-        "email_report_pdf",
-        session_token=report.submission.lead.session_token,
-        lead_id=report.submission.lead_id,
-        metadata={"email": str(payload.email)},
-        user_agent=request.headers.get("user-agent"),
-        ip_address=client_ip(request),
-    )
-    db.commit()
-    return MessageResponse(message="report sent")
-
-
-# ══════════════════════════════════════════════════════════════════
-# 2.9 获取渠道二维码
+# 2.8 获取渠道二维码
 # ══════════════════════════════════════════════════════════════════
 # 方法：GET
 # 路径：/api/public/channels/{code}/qr

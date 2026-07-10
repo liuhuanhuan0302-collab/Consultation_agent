@@ -12,6 +12,10 @@ from app.service.reporting import generate_report_content
 
 logger = logging.getLogger(__name__)
 
+# 单个报告通常会在数分钟内完成。超过该时长仍处于处理中，说明 worker
+# 大概率在生成报告或发送邮件的过程中退出，需要重新放回队列。
+STALE_PROCESSING_TIMEOUT = timedelta(minutes=15)
+
 
 def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -> ReportDeliveryJob:
     """创建或复用报告发送任务，提交接口只负责入队，不等待 AI 和邮件。"""
@@ -42,12 +46,38 @@ def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -
 
 
 def claim_next_job(db: Session) -> ReportDeliveryJob | None:
-    """领取一条待处理任务。单 worker 足够首版使用，多 worker 后续可加行级锁。"""
+    """领取一条待处理任务，并先回收意外中断的处理任务。"""
+    now = datetime.utcnow()
+    stale_before = now - STALE_PROCESSING_TIMEOUT
+
+    stale_jobs = (
+        db.query(ReportDeliveryJob)
+        .filter(
+            ReportDeliveryJob.status == ReportDeliveryStatus.processing.value,
+            ReportDeliveryJob.locked_at.is_not(None),
+            ReportDeliveryJob.locked_at < stale_before,
+        )
+        .all()
+    )
+    for stale_job in stale_jobs:
+        if stale_job.attempts >= stale_job.max_attempts:
+            stale_job.status = ReportDeliveryStatus.failed.value
+            stale_job.last_error = "任务处理超时，已达到最大重试次数"
+        else:
+            stale_job.status = ReportDeliveryStatus.queued.value
+            stale_job.run_after = now
+            stale_job.last_error = "任务处理超时，已重新加入队列"
+        stale_job.locked_at = None
+
+    if stale_jobs:
+        logger.warning("回收了 %s 条超时的报告发送任务", len(stale_jobs))
+        db.commit()
+
     job = (
         db.query(ReportDeliveryJob)
         .filter(
             ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
-            ReportDeliveryJob.run_after <= datetime.utcnow(),
+            ReportDeliveryJob.run_after <= now,
             ReportDeliveryJob.attempts < ReportDeliveryJob.max_attempts,
         )
         .order_by(ReportDeliveryJob.created_at.asc())
@@ -56,7 +86,7 @@ def claim_next_job(db: Session) -> ReportDeliveryJob | None:
     if not job:
         return None
     job.status = ReportDeliveryStatus.processing.value
-    job.locked_at = datetime.utcnow()
+    job.locked_at = now
     job.attempts += 1
     db.commit()
     db.refresh(job)
@@ -92,6 +122,7 @@ async def process_report_delivery_job(job_id: int) -> bool:
 
         job.status = ReportDeliveryStatus.sent.value
         job.sent_at = datetime.utcnow()
+        job.locked_at = None
         job.last_error = None
         db.commit()
         return True
@@ -106,6 +137,7 @@ async def process_report_delivery_job(job_id: int) -> bool:
             else:
                 job.status = ReportDeliveryStatus.queued.value
                 job.run_after = datetime.utcnow() + timedelta(minutes=2 * job.attempts)
+            job.locked_at = None
             db.commit()
         return False
     finally:
