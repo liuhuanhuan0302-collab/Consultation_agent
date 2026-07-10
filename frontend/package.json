@@ -1,0 +1,23 @@
+{
+  "name": "consultation-agent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "lucide-vue-next": "^0.468.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vue": "^3.5.13",
+    "vue-chartjs": "^5.3.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vue-tsc": "^2.2.0"
+  }
+}
