@@ -8,7 +8,7 @@ from app.database import SessionLocal
 from app.models import Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus
 from app.service.email_service import send_report_pdf_email
 from app.service.pdf_service import render_report_html_attachment, render_report_pdf_bytes, report_public_url
-from app.service.reporting import generate_report_content
+from app.service.reporting import generate_report_content, report_generation_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,8 @@ async def process_report_delivery_job(job_id: int) -> bool:
             report.status = ReportStatus.generating.value
             db.commit()
             db.refresh(report)
-            await generate_report_content(db, report)
+            async with report_generation_semaphore():
+                await generate_report_content(db, report)
         pdf = await render_report_pdf_bytes(report)
         html = render_report_html_attachment(report)
         report_url = report_public_url(report)
@@ -147,6 +148,18 @@ async def process_report_delivery_job(job_id: int) -> bool:
         return False
     finally:
         db.close()
+
+
+async def process_next_report_delivery() -> bool:
+    """领取并处理一条报告任务，供 Web 请求结束后的后台任务调用。"""
+    db = SessionLocal()
+    try:
+        job = claim_next_job(db)
+    finally:
+        db.close()
+    if not job:
+        return False
+    return await process_report_delivery_job(job.id)
 
 
 async def run_report_delivery_worker(poll_interval_seconds: float = 2.0) -> None:

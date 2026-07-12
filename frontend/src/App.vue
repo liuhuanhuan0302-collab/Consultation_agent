@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch, type Component } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from "vue";
 import {
   ArrowDownToLine,
   BarChart3,
@@ -75,6 +75,9 @@ const emailDialogOpen = ref(false);
 const reportEmail = ref("");
 const emailSending = ref(false);
 const emailNotice = ref("");
+const reportWaitSeconds = ref(0);
+const reportPollTimer = ref<number | null>(null);
+const reportWaitTimer = ref<number | null>(null);
 const missingNoticeVisible = ref(false);
 const missingNoticeMessage = ref("");
 const missingNoticeTimer = ref<number | null>(null);
@@ -240,15 +243,18 @@ function persistLeadForm() {
 }
 
 async function bootClient() {
-  modules.value = await api.questions();
-  if (moduleIndex.value >= modules.value.length) {
-    moduleIndex.value = 0;
-    localStorage.setItem("diagnosis_module_index", "0");
-  }
   if (!sessionToken.value) {
     const created = await api.createSession(sourceFromUrl());
     sessionToken.value = created.session_token;
     localStorage.setItem("diagnosis_session", created.session_token);
+  }
+
+  if (submissionId.value && await restoreSubmittedReport()) return;
+
+  modules.value = await api.questions();
+  if (moduleIndex.value >= modules.value.length) {
+    moduleIndex.value = 0;
+    localStorage.setItem("diagnosis_module_index", "0");
   }
 
   // 恢复中断的答题进度
@@ -258,6 +264,68 @@ async function bootClient() {
   } else if (savedStep === "info" || localStorage.getItem("diagnosis_lead_form")) {
     step.value = "info";
   }
+}
+
+function isReportReady(item: Report): boolean {
+  return Boolean(item.html_content && ["generated", "fallback"].includes(item.status));
+}
+
+function clearReportPolling() {
+  if (reportPollTimer.value !== null) {
+    window.clearInterval(reportPollTimer.value);
+    reportPollTimer.value = null;
+  }
+  if (reportWaitTimer.value !== null) {
+    window.clearInterval(reportWaitTimer.value);
+    reportWaitTimer.value = null;
+  }
+}
+
+function openReportPage(token: string) {
+  clearReportPolling();
+  localStorage.setItem("diagnosis_report_token", token);
+  localStorage.removeItem("diagnosis_step");
+  window.location.assign(`/report/${token}`);
+}
+
+async function checkSubmittedReport(): Promise<boolean> {
+  if (!submissionId.value || !sessionToken.value) return false;
+  try {
+    const currentReport = await api.submissionReport(submissionId.value, sessionToken.value);
+    report.value = currentReport;
+    localStorage.setItem("diagnosis_report_token", currentReport.public_token);
+    if (isReportReady(currentReport)) {
+      openReportPage(currentReport.public_token);
+      return true;
+    }
+  } catch {
+    // 尚未创建报告时继续保留在原来的填写/答题流程。
+  }
+  return false;
+}
+
+function startReportPolling() {
+  clearReportPolling();
+  reportWaitSeconds.value = 0;
+  reportWaitTimer.value = window.setInterval(() => {
+    reportWaitSeconds.value += 1;
+  }, 1000);
+  reportPollTimer.value = window.setInterval(() => {
+    void checkSubmittedReport();
+  }, 3000);
+  window.setTimeout(() => { void checkSubmittedReport(); }, 400);
+}
+
+async function restoreSubmittedReport(): Promise<boolean> {
+  const hasReport = await checkSubmittedReport();
+  if (hasReport) return true;
+  if (localStorage.getItem("diagnosis_report_token")) {
+    step.value = "submitted";
+    persistStep();
+    startReportPolling();
+    return true;
+  }
+  return false;
 }
 
 async function begin() {
@@ -416,15 +484,17 @@ async function submitQuestionnaire() {
     const result = await api.submitQuestionnaire(submissionId.value, answersToList());
     score.value = result.score;
     report.value = result.report;
-    step.value = result.report.html_content ? "report" : "submitted";
+    localStorage.setItem("diagnosis_report_token", result.report.public_token);
+    step.value = "submitted";
     localStorage.removeItem("diagnosis_answers");
-    localStorage.removeItem("diagnosis_step");
+    persistStep();
     await api.track(
-      result.report.html_content ? "report_displayed_inline" : "report_delivery_queued",
+      "report_delivery_queued",
       sessionToken.value,
       leadId.value,
       { report_id: result.report.id, email: leadForm.email }
     );
+    startReportPolling();
   } catch (err) {
     error.value = err instanceof Error ? err.message : "提交失败";
     await api.track("generate_report_failed", sessionToken.value, leadId.value);
@@ -777,6 +847,8 @@ onMounted(async () => {
     error.value = err instanceof Error ? err.message : "加载失败";
   }
 });
+
+onBeforeUnmount(clearReportPolling);
 </script>
 
 <template>
@@ -1212,10 +1284,11 @@ onMounted(async () => {
 
       <section v-if="step === 'submitted'" class="submitted-card">
         <div class="submitted-icon"><Check :size="34" /></div>
-        <h2>已收到您的诊断数据</h2>
-        <p>系统正在分析测算中，完整诊断报告生成后会发送至：</p>
+        <h2>正在生成您的诊断报告</h2>
+        <p>报告完成后会自动为您打开，同时发送至：</p>
         <strong>{{ leadForm.email }}</strong>
-        <p class="submitted-note">报告生成需要一点时间，请稍后查收邮箱。如邮件未出现在收件箱，也可以查看垃圾邮件或稍后联系顾问。</p>
+        <p v-if="reportWaitSeconds < 20" class="submitted-note">正在进行 AI 分析，请保持当前页面开启。</p>
+        <p v-else class="submitted-note">当前访问量较高，报告仍会在生成完成后发送至邮箱；您可以稍后通过邮件中的链接查看。</p>
       </section>
 
       <section v-if="step === 'report' && activeReport" class="report-view">

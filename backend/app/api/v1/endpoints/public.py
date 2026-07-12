@@ -15,7 +15,7 @@ import json
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -43,8 +43,7 @@ from app.schemas import (
     TrackEventRequest,
 )
 from app.service.diagnosis import active_modules_with_questions, persist_answers, score_submission
-from app.service.report_queue import enqueue_report_delivery
-from app.service.reporting import try_generate_report_content_now
+from app.service.report_queue import enqueue_report_delivery, process_next_report_delivery
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
 from app.utils.request import client_ip
@@ -257,6 +256,7 @@ async def submit_questionnaire(
     submission_id: int,
     payload: SubmitQuestionnaireRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> SubmitResponse:
     last_deadlock: OperationalError | None = None
@@ -281,7 +281,6 @@ async def submit_questionnaire(
                 db.flush()
             else:
                 report.status = ReportStatus.pending.value
-            generated_inline = await try_generate_report_content_now(db, report)
             enqueue_report_delivery(db, report, str(submission.lead.email))
             write_tracking_event(
                 db,
@@ -291,13 +290,14 @@ async def submit_questionnaire(
                 metadata={
                     "total_score": score.total_score,
                     "risk_level": score.risk_level,
-                    "report_generated_inline": generated_inline,
+                    "report_generated_inline": False,
                 },
                 user_agent=request.headers.get("user-agent"),
                 ip_address=client_ip(request),
             )
             db.commit()
             db.refresh(report)
+            background_tasks.add_task(process_next_report_delivery)
             break
         except OperationalError as exc:
             db.rollback()
@@ -321,6 +321,37 @@ async def submit_questionnaire(
             "advisor_messages": report_ai_messages(db, report.id),
         },
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# 2.7 查询本次提交的报告状态
+# ══════════════════════════════════════════════════════════════════
+# 方法：GET
+# 路径：/api/public/submissions/{submission_id}/report?session_token=...
+# 功能：用户返回页面时恢复已提交报告；报告生成完成时供前端自动跳转
+# 安全：提交记录必须属于当前浏览器保存的 session_token
+@router.get("/api/public/submissions/{submission_id}/report")
+def submission_report_status(submission_id: int, session_token: str, db: Session = Depends(get_db)) -> dict:
+    submission = get_submission_by_id(db, submission_id)
+    if not submission or submission.lead.session_token != session_token:
+        raise HTTPException(status_code=404, detail="Report not found")
+    report = submission.report
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    summary = json.loads(report.summary_json or "{}")
+    return {
+        "id": report.id,
+        "public_token": report.public_token,
+        "status": report.status,
+        "title": report.title,
+        "html_content": report.html_content,
+        "created_at": report.created_at,
+        "score": summary.get("score"),
+        "dimensions": summary.get("dimensions", []),
+        "low_dimensions": summary.get("low_dimensions", []),
+        "customer_classification": summary.get("customer_classification", {}),
+        "advisor_messages": report_ai_messages(db, report.id),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
