@@ -63,6 +63,7 @@ from app.repositories.consult_repo import (
     get_report_generated_count,
     get_total_lead_count,
     get_visit_uv,
+    latest_submission_for_lead,
     list_all_leads,
     list_leads,
     list_recent_events,
@@ -219,6 +220,76 @@ def export_leads(db: Session = Depends(get_db), user: User = Depends(LeadExporte
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# 3.6.1 查看线索详情
+# ══════════════════════════════════════════════════════════════════
+@router.get("/api/admin/leads/{lead_id}")
+def admin_get_lead_detail(lead_id: int, db: Session = Depends(get_db), user: User = Depends(LeadViewer)) -> dict:
+    lead = db.query(CompanyLead).filter(CompanyLead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    submission = latest_submission_for_lead(db, lead.id)
+    report = submission.report if submission else None
+    dimensions = []
+    if submission:
+        dimensions = [
+            {
+                "module_code": item.module.code,
+                "module_name": item.module.name,
+                "raw_score": item.raw_score,
+                "max_score": item.max_score,
+                "score_rate": item.score_rate,
+                "risk_level": item.risk_level,
+            }
+            for item in sorted(submission.dimension_scores, key=lambda score: score.module.sort_order)
+        ]
+
+    advisor_messages = []
+    if report:
+        advisor_messages = (
+            db.query(AiConversationMessage)
+            .filter(AiConversationMessage.report_id == report.id)
+            .order_by(AiConversationMessage.created_at.asc())
+            .all()
+        )
+
+    return {
+        "lead": LeadResponse.model_validate(lead).model_dump(mode="json"),
+        "submission": {
+            "id": submission.id,
+            "status": submission.status,
+            "total_score": submission.total_score,
+            "max_score": submission.max_score,
+            "score_rate": submission.score_rate,
+            "risk_level": submission.risk_level,
+            "created_at": submission.created_at,
+            "submitted_at": submission.submitted_at,
+            "dimensions": dimensions,
+        } if submission else None,
+        "report": {
+            "id": report.id,
+            "public_token": report.public_token,
+            "title": report.title,
+            "status": report.status,
+            "html_content": report.html_content,
+            "summary": json.loads(report.summary_json or "{}"),
+            "created_at": report.created_at,
+            "advisor_messages": [
+                {
+                    "role": message.role,
+                    "purpose": message.purpose,
+                    "content": message.content,
+                    "model_vendor": message.model_vendor,
+                    "model_name": message.model_name,
+                    "created_at": message.created_at,
+                }
+                for message in advisor_messages
+            ],
+        } if report else None,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════

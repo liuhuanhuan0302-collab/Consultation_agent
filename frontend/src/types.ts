@@ -146,3 +146,35 @@ export type User = {
   is_active: boolean;
   created_at: string;
 };
+
+export type LeadDetail = {
+  lead: Lead;
+  submission: {
+    id: number;
+    status: string;
+    total_score: number | null;
+    max_score: number;
+    score_rate: number | null;
+    risk_level: string | null;
+    created_at: string;
+    submitted_at: string | null;
+    dimensions: DimensionScore[];
+  } | null;
+  report: {
+    id: number;
+    public_token: string;
+    title: string;
+    status: string;
+    html_content: string;
+    summary: Record<string, unknown>;
+    created_at: string;
+    advisor_messages: {
+      role: string;
+      purpose: string;
+      content: string;
+      model_vendor: string | null;
+      model_name: string | null;
+      created_at: string;
+    }[];
+  } | null;
+};

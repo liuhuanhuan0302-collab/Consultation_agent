@@ -938,6 +938,163 @@ textarea:focus {
   padding: 12px 14px;
 }
 
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover {
+  background: #f8fafc;
+}
+
+.clickable-row:focus {
+  outline: 2px solid rgba(23, 107, 135, 0.28);
+  outline-offset: -2px;
+}
+
+.lead-detail-dialog {
+  background: #fff;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+  display: flex;
+  flex-direction: column;
+  max-height: min(860px, calc(100vh - 36px));
+  max-width: 1080px;
+  overflow: hidden;
+  width: min(1080px, calc(100vw - 40px));
+}
+
+.lead-detail-dialog > header {
+  align-items: center;
+  border-bottom: 1px solid #e5eaf0;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 18px 22px;
+}
+
+.lead-detail-dialog h2 {
+  color: #0f172a;
+  font-size: 22px;
+  margin: 0;
+}
+
+.lead-detail-body {
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+  padding: 18px 22px 22px;
+}
+
+.detail-block {
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.detail-block h3 {
+  color: #0f172a;
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.detail-grid,
+.detail-score-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.detail-grid div,
+.detail-score-grid div {
+  background: #f8fafc;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.detail-grid span,
+.detail-score-grid span,
+.detail-demand span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detail-grid strong,
+.detail-score-grid strong {
+  color: #18202f;
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-demand {
+  background: #f8fafc;
+  border-radius: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
+.detail-demand p,
+.empty-detail {
+  color: #475569;
+  line-height: 1.65;
+  margin: 6px 0 0;
+}
+
+.dimension-mini-list {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.dimension-mini-list div {
+  align-items: center;
+  background: #f8fafc;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 48px 64px;
+  padding: 8px 10px;
+}
+
+.dimension-mini-list span {
+  color: #344054;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dimension-mini-list b {
+  color: #176b87;
+}
+
+.dimension-mini-list em {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.detail-report-html {
+  background: #f8fafc;
+  border-radius: 8px;
+  max-height: 520px;
+  overflow: auto;
+  padding: 18px;
+}
+
+.detail-report-html .report-document > header,
+.detail-report-html .report-document > .report-score {
+  display: none;
+}
+
 /* ============================================================
    SCORE CARDS — 三张核心指标卡片
    ============================================================ */
@@ -2118,6 +2275,12 @@ th {
   .pagination {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .detail-grid,
+  .detail-score-grid,
+  .dimension-mini-list {
+    grid-template-columns: 1fr;
   }
 
   .funnel-card,

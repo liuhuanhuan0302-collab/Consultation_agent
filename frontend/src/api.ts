@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, QuestionModule, Report, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, QuestionModule, Report, ScoreResponse, User } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -60,6 +60,7 @@ export const api = {
   me: () => request<User>("/api/admin/me"),
   analytics: () => request<AnalyticsSummary>("/api/admin/analytics/summary"),
   leads: () => request<Lead[]>("/api/admin/leads"),
+  leadDetail: (leadId: number) => request<LeadDetail>(`/api/admin/leads/${leadId}`),
   adminQuestions: () => request<QuestionModule[]>("/api/admin/questions"),
   cases: () => request<CaseStudy[]>("/api/admin/cases"),
   createCase: (payload: Record<string, unknown>) =>

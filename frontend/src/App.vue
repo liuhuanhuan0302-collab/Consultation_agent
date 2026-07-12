@@ -20,7 +20,7 @@ import {
   Users
 } from "lucide-vue-next";
 import { api } from "./api";
-import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, QuestionModule, Report, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, QuestionModule, Report, ScoreResponse, User } from "./types";
 import ReportCharts from "./components/ReportCharts.vue";
 
 type Step = "intro" | "info" | "questionnaire" | "submitted" | "report";
@@ -159,7 +159,7 @@ function getGlobalIndex(module: QuestionModule, qIndex: number): number {
 const adminToken = ref(localStorage.getItem("admin_token"));
 const adminUser = ref<User | null>(null);
 const adminEmail = ref("admin@example.com");
-const adminPassword = ref("Admin123!");
+const adminPassword = ref("");
 const adminTab = ref<AdminTab>("overview");
 const analytics = ref<AnalyticsSummary | null>(null);
 const leads = ref<Lead[]>([]);
@@ -169,6 +169,9 @@ const leadIndustryFilter = ref("全部行业");
 const leadPageSize = ref(10);
 const leadPage = ref(1);
 const leadRuleDialogOpen = ref(false);
+const leadDetailOpen = ref(false);
+const leadDetailLoading = ref(false);
+const selectedLeadDetail = ref<LeadDetail | null>(null);
 const adminQuestions = ref<QuestionModule[]>([]);
 const cases = ref<CaseStudy[]>([]);
 const users = ref<User[]>([]);
@@ -477,6 +480,21 @@ function goLeadPage(direction: number) {
   leadPage.value = Math.min(leadTotalPages.value, Math.max(1, leadPage.value + direction));
 }
 
+async function openLeadDetail(lead: Lead) {
+  leadDetailOpen.value = true;
+  leadDetailLoading.value = true;
+  selectedLeadDetail.value = null;
+  error.value = "";
+  try {
+    selectedLeadDetail.value = await api.leadDetail(lead.id);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "加载客户详情失败";
+    leadDetailOpen.value = false;
+  } finally {
+    leadDetailLoading.value = false;
+  }
+}
+
 function logoutAdmin() {
   localStorage.removeItem("admin_token");
   adminToken.value = null;
@@ -498,6 +516,11 @@ const reportScore = computed(() => {
 });
 const reportHtml = computed(() => normalizeReportHtml(activeReport.value?.html_content || ""));
 const pdfToken = computed(() => activeReport.value?.public_token || "");
+const leadDetailReportHtml = computed(() => normalizeReportHtml(selectedLeadDetail.value?.report?.html_content || ""));
+const selectedLeadScoreRate = computed(() => {
+  const rate = selectedLeadDetail.value?.submission?.score_rate;
+  return rate === null || rate === undefined ? "-" : `${Math.round(rate * 100)}%`;
+});
 const leadStrategyOptions = computed(() => ["全部打法", ...Array.from(new Set(leads.value.map((lead) => lead.priority_strategy || "未判定").filter(Boolean)))]);
 const leadIndustryOptions = computed(() => ["全部行业", ...Array.from(new Set(leads.value.map((lead) => lead.industry || "未填写").filter(Boolean)))]);
 const filteredLeads = computed(() => {
@@ -875,7 +898,7 @@ onMounted(async () => {
           <table class="leads-table">
             <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>打法</th><th>时间</th></tr></thead>
             <tbody>
-              <tr v-for="lead in pagedLeads" :key="lead.id">
+              <tr v-for="lead in pagedLeads" :key="lead.id" class="clickable-row" tabindex="0" @click="openLeadDetail(lead)" @keydown.enter="openLeadDetail(lead)">
                 <td :title="lead.company_name || ''">{{ lead.company_name }}</td>
                 <td :title="lead.industry || ''">{{ lead.industry }}</td>
                 <td :title="lead.contact_name || ''">{{ lead.contact_name }}</td>
@@ -1219,6 +1242,66 @@ onMounted(async () => {
         <button class="primary" :disabled="emailSending">{{ emailSending ? "发送中..." : "发送报告" }}</button>
       </div>
     </form>
+  </div>
+
+  <div v-if="leadDetailOpen" class="modal-backdrop" @click.self="leadDetailOpen = false">
+    <section class="lead-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="lead-detail-title">
+      <header>
+        <div>
+          <p class="eyebrow">客户详情</p>
+          <h2 id="lead-detail-title">{{ selectedLeadDetail?.lead.company_name || "客户详情" }}</h2>
+        </div>
+        <button class="secondary" type="button" @click="leadDetailOpen = false">关闭</button>
+      </header>
+
+      <div v-if="leadDetailLoading" class="loading">客户详情加载中...</div>
+      <div v-else-if="selectedLeadDetail" class="lead-detail-body">
+        <section class="detail-block">
+          <h3>基本信息</h3>
+          <div class="detail-grid">
+            <div><span>公司</span><strong>{{ selectedLeadDetail.lead.company_name || "-" }}</strong></div>
+            <div><span>行业</span><strong>{{ selectedLeadDetail.lead.industry || "-" }}</strong></div>
+            <div><span>规模</span><strong>{{ selectedLeadDetail.lead.company_size || "-" }}</strong></div>
+            <div><span>年营收</span><strong>{{ selectedLeadDetail.lead.annual_revenue || "-" }}</strong></div>
+            <div><span>联系人</span><strong>{{ selectedLeadDetail.lead.contact_name || "-" }}</strong></div>
+            <div><span>职位</span><strong>{{ selectedLeadDetail.lead.position || "-" }}</strong></div>
+            <div><span>手机号</span><strong>{{ selectedLeadDetail.lead.phone || "-" }}</strong></div>
+            <div><span>邮箱</span><strong>{{ selectedLeadDetail.lead.email || "-" }}</strong></div>
+            <div><span>微信</span><strong>{{ selectedLeadDetail.lead.wechat || "-" }}</strong></div>
+            <div><span>来源</span><strong>{{ selectedLeadDetail.lead.source_code || "-" }}</strong></div>
+          </div>
+          <div class="detail-demand">
+            <span>AI 转型关注点</span>
+            <p>{{ selectedLeadDetail.lead.ai_focus || selectedLeadDetail.lead.demand_summary || "未填写" }}</p>
+          </div>
+        </section>
+
+        <section class="detail-block">
+          <h3>诊断结果</h3>
+          <div class="detail-score-grid">
+            <div><span>线索等级</span><strong><span class="pill" :class="selectedLeadDetail.lead.lead_level">{{ selectedLeadDetail.lead.lead_level }}</span></strong></div>
+            <div><span>建议打法</span><strong><span class="pill strategy">{{ selectedLeadDetail.lead.priority_strategy || "未判定" }}</span></strong></div>
+            <div><span>总分</span><strong>{{ selectedLeadDetail.submission?.total_score ?? "-" }}/{{ selectedLeadDetail.submission?.max_score ?? 260 }}</strong></div>
+            <div><span>得分率</span><strong>{{ selectedLeadScoreRate }}</strong></div>
+            <div><span>风险等级</span><strong>{{ selectedLeadDetail.submission?.risk_level || "-" }}</strong></div>
+            <div><span>提交时间</span><strong>{{ selectedLeadDetail.submission?.submitted_at ? new Date(selectedLeadDetail.submission.submitted_at).toLocaleString() : "-" }}</strong></div>
+          </div>
+          <div v-if="selectedLeadDetail.submission?.dimensions?.length" class="dimension-mini-list">
+            <div v-for="item in selectedLeadDetail.submission.dimensions" :key="item.module_code">
+              <span>{{ item.module_name }}</span>
+              <b>{{ Math.round(item.score_rate * 100) }}%</b>
+              <em>{{ item.risk_level }}</em>
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-block">
+          <h3>AI 分析报告</h3>
+          <div v-if="selectedLeadDetail.report?.html_content" class="detail-report-html" v-html="leadDetailReportHtml"></div>
+          <p v-else class="empty-detail">报告还未生成或暂无内容。</p>
+        </section>
+      </div>
+    </section>
   </div>
 
   <div v-if="leadRuleDialogOpen" class="modal-backdrop" @click.self="leadRuleDialogOpen = false">
