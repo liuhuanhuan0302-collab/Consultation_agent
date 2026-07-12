@@ -355,6 +355,35 @@ def submission_report_status(submission_id: int, session_token: str, db: Session
 
 
 # ══════════════════════════════════════════════════════════════════
+# 2.8 按浏览器会话恢复最近报告
+# ══════════════════════════════════════════════════════════════════
+# 方法：GET
+# 路径：/api/public/sessions/report?session_token=...
+# 功能：兼容旧版本本地未保存 submission_id 的已提交用户
+@router.get("/api/public/sessions/report")
+def latest_session_report(session_token: str, db: Session = Depends(get_db)) -> dict:
+    lead = get_lead_by_session(db, session_token)
+    submission = latest_submission_for_lead(db, lead.id) if lead else None
+    report = submission.report if submission else None
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    summary = json.loads(report.summary_json or "{}")
+    return {
+        "id": report.id,
+        "public_token": report.public_token,
+        "status": report.status,
+        "title": report.title,
+        "html_content": report.html_content,
+        "created_at": report.created_at,
+        "score": summary.get("score"),
+        "dimensions": summary.get("dimensions", []),
+        "low_dimensions": summary.get("low_dimensions", []),
+        "customer_classification": summary.get("customer_classification", {}),
+        "advisor_messages": report_ai_messages(db, report.id),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
 # 2.7 查看公开报告
 # ══════════════════════════════════════════════════════════════════
 # 方法：GET

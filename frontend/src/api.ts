@@ -48,6 +48,8 @@ export const api = {
     }),
   submissionReport: (submissionId: number, sessionToken: string) =>
     request<Report>(`/api/public/submissions/${submissionId}/report?session_token=${encodeURIComponent(sessionToken)}`),
+  latestSessionReport: (sessionToken: string) =>
+    request<Report>(`/api/public/sessions/report?session_token=${encodeURIComponent(sessionToken)}`),
   publicReport: (token: string) => request<Report>(`/api/public/reports/${token}`),
   emailReport: (token: string, email: string) =>
     request<{ message: string }>(`/api/public/reports/${token}/email`, {

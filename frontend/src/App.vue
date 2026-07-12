@@ -249,7 +249,7 @@ async function bootClient() {
     localStorage.setItem("diagnosis_session", created.session_token);
   }
 
-  if (submissionId.value && await restoreSubmittedReport()) return;
+  if (await restoreSubmittedReport()) return;
 
   modules.value = await api.questions();
   if (moduleIndex.value >= modules.value.length) {
@@ -289,9 +289,16 @@ function openReportPage(token: string) {
 }
 
 async function checkSubmittedReport(): Promise<boolean> {
-  if (!submissionId.value || !sessionToken.value) return false;
+  if (!sessionToken.value) return false;
   try {
-    const currentReport = await api.submissionReport(submissionId.value, sessionToken.value);
+    let currentReport: Report;
+    try {
+      currentReport = submissionId.value
+        ? await api.submissionReport(submissionId.value, sessionToken.value)
+        : await api.latestSessionReport(sessionToken.value);
+    } catch {
+      currentReport = await api.latestSessionReport(sessionToken.value);
+    }
     report.value = currentReport;
     localStorage.setItem("diagnosis_report_token", currentReport.public_token);
     if (isReportReady(currentReport)) {
