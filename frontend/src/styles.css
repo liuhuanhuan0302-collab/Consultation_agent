@@ -1625,6 +1625,16 @@ th {
   padding: 24px;
 }
 
+.admin-main > :not(.tabs) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.admin-main > div:not(.tabs) {
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .tabs {
   flex: 0 0 auto;
   display: flex;
@@ -1668,6 +1678,26 @@ th {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+
+.admin-feedback {
+  border-radius: 6px;
+  flex: 0 0 auto !important;
+  font-size: 14px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+}
+
+.error-feedback {
+  background: #fff1f0;
+  border: 1px solid #ffc9c5;
+  color: #b42318;
+}
+
+.success-feedback {
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+  color: #067647;
 }
 
 .metric {
@@ -2122,6 +2152,22 @@ th {
   color: #475467;
   margin: 0;
   font-size: 13px;
+}
+
+.danger-text-button {
+  align-items: center;
+  background: transparent;
+  color: #b42318;
+  display: inline-flex;
+  font-size: 13px;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 2px 0;
+}
+
+.danger-text-button:hover {
+  background: transparent;
+  color: #8f1b13;
 }
 
 .loading {

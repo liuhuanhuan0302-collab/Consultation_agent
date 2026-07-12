@@ -79,5 +79,9 @@ export const api = {
     request<ChannelSource>("/api/admin/channels", {
       method: "POST",
       body: JSON.stringify(payload)
+    }),
+  deleteChannel: (channelId: number) =>
+    request<{ message: string }>(`/api/admin/channels/${channelId}`, {
+      method: "DELETE"
     })
 };

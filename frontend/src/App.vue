@@ -17,6 +17,7 @@ import {
   QrCode,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Users
 } from "lucide-vue-next";
 import { api } from "./api";
@@ -67,6 +68,7 @@ const score = ref<ScoreResponse | null>(null);
 const report = ref<Report | null>(null);
 const publicReport = ref<Report | null>(null);
 const error = ref("");
+const adminNotice = ref("");
 const busy = ref(false);
 const draftSaved = ref(false);
 const emailDialogOpen = ref(false);
@@ -190,7 +192,7 @@ const userForm = reactive({
   email: "",
   name: "",
   role: "sales",
-  password: "ChangeMe123!"
+  password: ""
 });
 
 const questions = computed(() => modules.value.flatMap((module) => module.questions));
@@ -681,18 +683,49 @@ async function createCase() {
 }
 
 async function createChannel() {
-  const created = await api.createChannel({ ...channelForm, is_active: true });
-  channels.value = [...channels.value, created];
-  channelForm.code = "";
-  channelForm.name = "";
-  channelForm.description = "";
+  error.value = "";
+  adminNotice.value = "";
+  try {
+    const created = await api.createChannel({ ...channelForm, is_active: true });
+    const index = channels.value.findIndex((item) => item.id === created.id);
+    channels.value = index >= 0
+      ? channels.value.map((item) => item.id === created.id ? created : item)
+      : [...channels.value, created];
+    channelForm.code = "";
+    channelForm.name = "";
+    channelForm.description = "";
+    adminNotice.value = "渠道二维码已生成";
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "渠道创建失败";
+  }
 }
 
 async function createUser() {
-  const created = await api.createUser({ ...userForm });
-  users.value = [...users.value, created];
-  userForm.email = "";
-  userForm.name = "";
+  error.value = "";
+  adminNotice.value = "";
+  try {
+    const created = await api.createUser({ ...userForm });
+    users.value = [...users.value, created];
+    userForm.email = "";
+    userForm.name = "";
+    userForm.password = "";
+    adminNotice.value = "账号已创建，可使用邮箱和初始密码登录";
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "账号创建失败";
+  }
+}
+
+async function deleteChannel(item: ChannelSource) {
+  if (!window.confirm(`确定删除“${item.name}”的二维码吗？删除后链接将立即失效。`)) return;
+  error.value = "";
+  adminNotice.value = "";
+  try {
+    await api.deleteChannel(item.id);
+    channels.value = channels.value.filter((channel) => channel.id !== item.id);
+    adminNotice.value = "渠道二维码已删除";
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "删除二维码失败";
+  }
 }
 
 function handleBeforeUnload() {
@@ -778,6 +811,8 @@ onMounted(async () => {
           <component :is="tab.icon" :size="17" /> {{ tab.label }}
         </button>
       </nav>
+      <div v-if="error" class="admin-feedback error-feedback">{{ error }}</div>
+      <div v-if="adminNotice" class="admin-feedback success-feedback">{{ adminNotice }}</div>
 
       <div v-if="adminTab === 'overview'">
         <div v-if="analytics" class="metric-grid">
@@ -969,6 +1004,7 @@ onMounted(async () => {
             <div class="channel-info">
               <h3>{{ item.name }}</h3>
               <p>{{ item.code }}<span v-if="item.description"> · {{ item.description }}</span></p>
+              <button class="danger-text-button" @click="deleteChannel(item)"><Trash2 :size="15" /> 删除二维码</button>
             </div>
           </article>
         </div>
@@ -985,7 +1021,7 @@ onMounted(async () => {
             <option value="consultant">顾问/FDE</option>
             <option value="admin">管理员</option>
           </select>
-          <input v-model="userForm.password" placeholder="初始密码" />
+          <input v-model="userForm.password" type="password" required minlength="8" autocomplete="new-password" placeholder="初始密码（不少于 8 位）" />
           <button class="primary"><Check :size="18" /> 创建</button>
         </form>
         <div class="table-section">

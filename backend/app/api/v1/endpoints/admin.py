@@ -45,6 +45,7 @@ from app.schemas import (
     ChannelUpsert,
     LeadResponse,
     LoginRequest,
+    MessageResponse,
     ModuleRead,
     ModuleUpsert,
     QuestionRead,
@@ -479,6 +480,25 @@ def upsert_channel(payload: ChannelUpsert, db: Session = Depends(get_db), user: 
     db.commit()
     db.refresh(channel)
     return channel
+
+
+# ══════════════════════════════════════════════════════════════════
+# 3.15 删除渠道二维码
+# ══════════════════════════════════════════════════════════════════
+# 方法：DELETE
+# 路径：/api/admin/channels/{channel_id}
+# 功能：删除渠道及其二维码入口，原二维码链接立即失效
+# 鉴权：admin / operator
+@router.delete("/api/admin/channels/{channel_id}", response_model=MessageResponse)
+def delete_channel(channel_id: int, db: Session = Depends(get_db), user: User = Depends(ContentManager)) -> MessageResponse:
+    channel = db.get(ChannelSource, channel_id)
+    if not channel:
+        raise HTTPException(status_code=404, detail="渠道不存在")
+    code = channel.code
+    db.delete(channel)
+    write_operation_log(db, user, "delete_channel", "channel_source", code)
+    db.commit()
+    return MessageResponse(message="渠道二维码已删除")
 
 
 # ══════════════════════════════════════════════════════════════════
