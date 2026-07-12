@@ -112,6 +112,15 @@ export type ChannelSource = {
   created_at: string;
 };
 
+export type AnalyticsBucket = {
+  label: string;
+  count: number;
+};
+
+export type AnalyticsFunnelStep = AnalyticsBucket & {
+  rate: number;
+};
+
 export type AnalyticsSummary = {
   visit_uv: number;
   started_count: number;
@@ -121,6 +130,12 @@ export type AnalyticsSummary = {
   report_claimed_count: number;
   high_intent_leads: number;
   lead_count: number;
+  questionnaire_completion_rate: number;
+  funnel: AnalyticsFunnelStep[];
+  hourly_questionnaire_counts: AnalyticsBucket[];
+  lead_level_distribution: AnalyticsBucket[];
+  strategy_distribution: AnalyticsBucket[];
+  industry_distribution: AnalyticsBucket[];
 };
 
 export type User = {

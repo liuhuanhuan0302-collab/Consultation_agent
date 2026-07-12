@@ -44,6 +44,7 @@ from app.schemas import (
 )
 from app.service.diagnosis import active_modules_with_questions, persist_answers, score_submission
 from app.service.report_queue import enqueue_report_delivery
+from app.service.reporting import try_generate_report_content_now
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
 from app.utils.request import client_ip
@@ -280,13 +281,18 @@ async def submit_questionnaire(
                 db.flush()
             else:
                 report.status = ReportStatus.pending.value
+            generated_inline = await try_generate_report_content_now(db, report)
             enqueue_report_delivery(db, report, str(submission.lead.email))
             write_tracking_event(
                 db,
                 "submit_questionnaire",
                 session_token=submission.lead.session_token,
                 lead_id=submission.lead_id,
-                metadata={"total_score": score.total_score, "risk_level": score.risk_level},
+                metadata={
+                    "total_score": score.total_score,
+                    "risk_level": score.risk_level,
+                    "report_generated_inline": generated_inline,
+                },
                 user_agent=request.headers.get("user-agent"),
                 ip_address=client_ip(request),
             )

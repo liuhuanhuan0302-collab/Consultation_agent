@@ -392,6 +392,24 @@ async def generate_report_content(db: Session, report: Report) -> Report:
     return report
 
 
+async def try_generate_report_content_now(db: Session, report: Report) -> bool:
+    """
+    当前进程还有空闲生成名额时，直接为前台请求生成报告。
+    忙碌时返回 False，由提交接口继续走后台队列，避免用户长时间等待。
+    """
+    semaphore = report_generation_semaphore()
+    if getattr(semaphore, "_value", 0) <= 0:
+        return False
+    await semaphore.acquire()
+    try:
+        report.status = ReportStatus.generating.value
+        db.flush()
+        await generate_report_content(db, report)
+        return True
+    finally:
+        semaphore.release()
+
+
 async def generate_report_content_for_id(report_id: int) -> None:
     """
     后台生成报告。

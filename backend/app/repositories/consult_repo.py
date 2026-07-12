@@ -67,6 +67,28 @@ def get_total_lead_count(db: Session) -> int:
     return db.query(func.count(CompanyLead.id)).scalar() or 0
 
 
+def get_lead_group_counts(db: Session, column) -> list[dict]:
+    rows = (
+        db.query(column, func.count(CompanyLead.id))
+        .group_by(column)
+        .order_by(func.count(CompanyLead.id).desc())
+        .all()
+    )
+    return [{"label": label or "未填写", "count": count} for label, count in rows]
+
+
+def get_questionnaire_hourly_counts(db: Session) -> list[dict]:
+    events = (
+        db.query(TrackingEvent.created_at)
+        .filter(TrackingEvent.event_name == "submit_questionnaire")
+        .all()
+    )
+    buckets = {hour: 0 for hour in range(24)}
+    for (created_at,) in events:
+        buckets[created_at.hour] += 1
+    return [{"label": f"{hour:02d}:00", "count": buckets[hour]} for hour in range(24)]
+
+
 def list_recent_events(db: Session, limit: int = 200) -> list[TrackingEvent]:
     return db.query(TrackingEvent).order_by(TrackingEvent.created_at.desc()).limit(limit).all()
 

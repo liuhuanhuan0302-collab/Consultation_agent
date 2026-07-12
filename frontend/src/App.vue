@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch, type Component } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch, type Component } from "vue";
 import {
   ArrowDownToLine,
   BarChart3,
@@ -25,6 +25,7 @@ import ReportCharts from "./components/ReportCharts.vue";
 
 type Step = "intro" | "info" | "questionnaire" | "submitted" | "report";
 type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels";
+type LeadSortOrder = "newest" | "oldest";
 type LeadFormState = {
   company_name: string;
   industry: string;
@@ -43,6 +44,14 @@ type LeadFormState = {
 const industries = ["制造业", "消费品", "零售电商", "教育培训", "医疗健康", "专业服务", "其他"];
 const companySizes = ["1-200人", "200-500人", "500-1000人", "2000-5000人", "5000人以上"];
 const revenues = ["暂不填写", "<1亿", "1-5亿", "5-10亿", ">10亿"];
+const aiFocusOptions = [
+  "想提升获客、销售转化和客户跟进效率",
+  "想用 AI 优化内部流程、审批和协同效率",
+  "想搭建企业知识库，让员工更快找到资料和答案",
+  "想做智能客服、售后支持或客户服务自动化",
+  "想用 AI 辅助内容生产、营销物料和方案撰写",
+  "想先判断公司适合从哪些 AI 场景开始"
+];
 
 const isAdmin = window.location.pathname.startsWith("/admin");
 const reportToken = window.location.pathname.match(/^\/report\/([^/]+)/)?.[1] || "";
@@ -64,6 +73,9 @@ const emailDialogOpen = ref(false);
 const reportEmail = ref("");
 const emailSending = ref(false);
 const emailNotice = ref("");
+const missingNoticeVisible = ref(false);
+const missingNoticeMessage = ref("");
+const missingNoticeTimer = ref<number | null>(null);
 
 const defaultLeadForm: LeadFormState = {
   company_name: "",
@@ -97,6 +109,23 @@ function loadSavedLeadForm(): LeadFormState {
 const leadForm = reactive<LeadFormState>(loadSavedLeadForm());
 
 const phoneWechatSame = ref(false);
+const selectedAiFocus = ref<string[]>([]);
+const aiFocusOther = ref("");
+
+function restoreAiFocus() {
+  const saved = leadForm.ai_focus
+    .split("；")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  selectedAiFocus.value = saved.filter((item) => aiFocusOptions.includes(item));
+  aiFocusOther.value = saved.filter((item) => !aiFocusOptions.includes(item)).join("；");
+}
+
+function syncAiFocus() {
+  leadForm.ai_focus = [...selectedAiFocus.value, aiFocusOther.value.trim()].filter(Boolean).join("；");
+}
+
+restoreAiFocus();
 
 function syncPhoneWechat() {
   if (phoneWechatSame.value && leadForm.phone) {
@@ -134,6 +163,12 @@ const adminPassword = ref("Admin123!");
 const adminTab = ref<AdminTab>("overview");
 const analytics = ref<AnalyticsSummary | null>(null);
 const leads = ref<Lead[]>([]);
+const leadSortOrder = ref<LeadSortOrder>("newest");
+const leadStrategyFilter = ref("全部打法");
+const leadIndustryFilter = ref("全部行业");
+const leadPageSize = ref(10);
+const leadPage = ref(1);
+const leadRuleDialogOpen = ref(false);
 const adminQuestions = ref<QuestionModule[]>([]);
 const cases = ref<CaseStudy[]>([]);
 const users = ref<User[]>([]);
@@ -180,6 +215,15 @@ function sourceFromUrl() {
 
 function pct(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+function bucketPct(count: number, buckets: { count: number }[]) {
+  const max = Math.max(1, ...buckets.map((item) => item.count));
+  return `${Math.max(4, Math.round((count / max) * 100))}%`;
+}
+
+function completionRate(value: number | undefined) {
+  return `${Math.round((value || 0) * 100)}%`;
 }
 
 function answersToList() {
@@ -234,6 +278,11 @@ async function submitLead() {
     error.value = "手机号或微信至少填写一项";
     return;
   }
+  syncAiFocus();
+  if (!leadForm.ai_focus.trim()) {
+    error.value = "请选择当前最关注的 AI 转型方向";
+    return;
+  }
   if (!leadForm.privacy_accepted) {
     error.value = "请先勾选同意用于生成诊断报告和后续顾问联系";
     return;
@@ -263,15 +312,65 @@ function moduleDone(module: QuestionModule): boolean {
   return module.questions.every((q) => answers.value[q.id] !== undefined);
 }
 
-function goToModule(index: number) {
+function isAnswerSelected(questionId: number, value: number): boolean {
+  return Number(answers.value[questionId]) === value;
+}
+
+function firstMissingQuestion(module: QuestionModule) {
+  return module.questions.find((q) => answers.value[q.id] === undefined);
+}
+
+async function focusQuestion(questionId: number) {
+  await nextTick();
+  const target = document.getElementById(`question-${questionId}`);
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function showMissingNotice(message: string) {
+  missingNoticeMessage.value = message;
+  missingNoticeVisible.value = true;
+  if (missingNoticeTimer.value !== null) {
+    window.clearTimeout(missingNoticeTimer.value);
+  }
+  missingNoticeTimer.value = window.setTimeout(() => {
+    missingNoticeVisible.value = false;
+    missingNoticeTimer.value = null;
+  }, 3200);
+}
+
+async function showMissingQuestion(module: QuestionModule, index: number) {
+  const missing = firstMissingQuestion(module);
+  if (!missing) return false;
+  const missingCount = module.questions.filter((question) => answers.value[question.id] === undefined).length;
   moduleIndex.value = index;
   localStorage.setItem("diagnosis_module_index", String(index));
+  error.value = "";
+  showMissingNotice(`当前页面还有 ${missingCount} 题未答，请先完成后再进入下一组。`);
+  await focusQuestion(missing.id);
+  return true;
+}
+
+async function goToModule(index: number) {
+  if (index > moduleIndex.value) {
+    const blockedIndex = modules.value.findIndex((module, moduleIdx) => moduleIdx < index && !moduleDone(module));
+    if (blockedIndex >= 0) {
+      await showMissingQuestion(modules.value[blockedIndex], blockedIndex);
+      return;
+    }
+  }
+  moduleIndex.value = index;
+  localStorage.setItem("diagnosis_module_index", String(index));
+  error.value = "";
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function goNextModule() {
+async function goNextModule() {
+  if (!currentModule.value) return;
+  if (await showMissingQuestion(currentModule.value, moduleIndex.value)) {
+    return;
+  }
   if (moduleIndex.value < modules.value.length - 1) {
-    goToModule(moduleIndex.value + 1);
+    await goToModule(moduleIndex.value + 1);
   }
 }
 
@@ -284,6 +383,10 @@ function goPrevModule() {
 async function selectAnswer(questionId: number, value: number) {
   answers.value = { ...answers.value, [questionId]: value };
   localStorage.setItem("diagnosis_answers", JSON.stringify(answers.value));
+  if (currentModule.value && !firstMissingQuestion(currentModule.value)) {
+    error.value = "";
+    missingNoticeVisible.value = false;
+  }
   if (submissionId.value) {
     await api.saveDraft(submissionId.value, answersToList()).catch(() => undefined);
   }
@@ -297,7 +400,9 @@ async function submitQuestionnaire() {
   if (missing) {
     const targetIndex = modules.value.findIndex((module) => module.questions.some((question) => question.id === missing.id));
     moduleIndex.value = Math.max(0, targetIndex);
-    error.value = `还有题目未填写：${missing.code}`;
+    error.value = "";
+    showMissingNotice(`还有题目未填写，已为你跳转到漏答位置：${missing.code}`);
+    await focusQuestion(missing.id);
     return;
   }
   busy.value = true;
@@ -306,10 +411,15 @@ async function submitQuestionnaire() {
     const result = await api.submitQuestionnaire(submissionId.value, answersToList());
     score.value = result.score;
     report.value = result.report;
-    step.value = "submitted";
+    step.value = result.report.html_content ? "report" : "submitted";
     localStorage.removeItem("diagnosis_answers");
     localStorage.removeItem("diagnosis_step");
-    await api.track("report_delivery_queued", sessionToken.value, leadId.value, { report_id: result.report.id, email: leadForm.email });
+    await api.track(
+      result.report.html_content ? "report_displayed_inline" : "report_delivery_queued",
+      sessionToken.value,
+      leadId.value,
+      { report_id: result.report.id, email: leadForm.email }
+    );
   } catch (err) {
     error.value = err instanceof Error ? err.message : "提交失败";
     await api.track("generate_report_failed", sessionToken.value, leadId.value);
@@ -349,11 +459,22 @@ async function loadAdminShell() {
 async function loadAdminTab(tab: AdminTab) {
   adminTab.value = tab;
   if (tab === "overview") analytics.value = await api.analytics();
-  if (tab === "leads") leads.value = await api.leads();
+  if (tab === "leads") {
+    leads.value = await api.leads();
+    resetLeadPage();
+  }
   if (tab === "questions") adminQuestions.value = await api.adminQuestions();
   if (tab === "cases") cases.value = await api.cases();
   if (tab === "users") users.value = await api.users().catch(() => []);
   if (tab === "channels") channels.value = await api.channels().catch(() => []);
+}
+
+function resetLeadPage() {
+  leadPage.value = 1;
+}
+
+function goLeadPage(direction: number) {
+  leadPage.value = Math.min(leadTotalPages.value, Math.max(1, leadPage.value + direction));
 }
 
 function logoutAdmin() {
@@ -377,6 +498,25 @@ const reportScore = computed(() => {
 });
 const reportHtml = computed(() => normalizeReportHtml(activeReport.value?.html_content || ""));
 const pdfToken = computed(() => activeReport.value?.public_token || "");
+const leadStrategyOptions = computed(() => ["全部打法", ...Array.from(new Set(leads.value.map((lead) => lead.priority_strategy || "未判定").filter(Boolean)))]);
+const leadIndustryOptions = computed(() => ["全部行业", ...Array.from(new Set(leads.value.map((lead) => lead.industry || "未填写").filter(Boolean)))]);
+const filteredLeads = computed(() => {
+  return leads.value
+    .filter((lead) => leadStrategyFilter.value === "全部打法" || (lead.priority_strategy || "未判定") === leadStrategyFilter.value)
+    .filter((lead) => leadIndustryFilter.value === "全部行业" || (lead.industry || "未填写") === leadIndustryFilter.value)
+    .sort((a, b) => {
+      const diff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      return leadSortOrder.value === "newest" ? diff : -diff;
+    });
+});
+const leadTotalPages = computed(() => Math.max(1, Math.ceil(filteredLeads.value.length / leadPageSize.value)));
+const pagedLeads = computed(() => {
+  const safePage = Math.min(leadPage.value, leadTotalPages.value);
+  const start = (safePage - 1) * leadPageSize.value;
+  return filteredLeads.value.slice(start, start + leadPageSize.value);
+});
+const leadPageStart = computed(() => filteredLeads.value.length ? (Math.min(leadPage.value, leadTotalPages.value) - 1) * leadPageSize.value + 1 : 0);
+const leadPageEnd = computed(() => Math.min(leadPageStart.value + leadPageSize.value - 1, filteredLeads.value.length));
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -553,8 +693,18 @@ watch(
   { deep: true },
 );
 
+watch([selectedAiFocus, aiFocusOther], syncAiFocus, { deep: true });
+
 watch(moduleIndex, (value: number) => {
   localStorage.setItem("diagnosis_module_index", String(value));
+});
+
+watch([leadSortOrder, leadStrategyFilter, leadIndustryFilter, leadPageSize], resetLeadPage);
+
+watch(leadTotalPages, (totalPages) => {
+  if (leadPage.value > totalPages) {
+    leadPage.value = totalPages;
+  }
 });
 
 onMounted(async () => {
@@ -574,6 +724,11 @@ onMounted(async () => {
 </script>
 
 <template>
+  <div v-if="missingNoticeVisible" class="top-message" role="status" aria-live="polite">
+    <span class="top-message-icon">!</span>
+    <span>{{ missingNoticeMessage }}</span>
+  </div>
+
   <main v-if="isAdmin && !adminToken" class="login-shell">
     <form class="login-box" @submit.prevent="loginAdmin">
       <Lock :size="28" />
@@ -612,29 +767,138 @@ onMounted(async () => {
           <div class="metric"><BarChart3 :size="18" /><span>高意向线索</span><strong>{{ analytics.high_intent_leads }}</strong></div>
           <div class="metric"><BarChart3 :size="18" /><span>线索总数</span><strong>{{ analytics.lead_count }}</strong></div>
         </div>
+        <div v-if="analytics" class="analytics-panel-grid">
+          <section class="analytics-card funnel-card">
+            <header>
+              <h2>答题完成率</h2>
+              <strong>{{ completionRate(analytics.questionnaire_completion_rate) }}</strong>
+            </header>
+            <div class="funnel-list">
+              <div v-for="item in analytics.funnel" :key="item.label" class="funnel-row">
+                <span>{{ item.label }}</span>
+                <div class="funnel-track"><i :style="{ width: `${Math.round(item.rate * 100)}%` }"></i></div>
+                <b>{{ item.count }}</b>
+                <em>{{ pct(item.rate) }}</em>
+              </div>
+            </div>
+          </section>
+
+          <section class="analytics-card hourly-card">
+            <header>
+              <h2>答题时间段人数</h2>
+              <span>按问卷完成时间统计</span>
+            </header>
+            <div class="hour-bars">
+              <div v-for="item in analytics.hourly_questionnaire_counts" :key="item.label" class="hour-bar" :title="`${item.label} · ${item.count}人`">
+                <i :style="{ height: bucketPct(item.count, analytics.hourly_questionnaire_counts) }"></i>
+                <span>{{ item.label.slice(0, 2) }}</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="analytics-card distribution-card">
+            <header><h2>线索等级分布</h2></header>
+            <div class="rank-list">
+              <div v-for="item in analytics.lead_level_distribution" :key="item.label">
+                <span>{{ item.label }}</span>
+                <div><i :style="{ width: bucketPct(item.count, analytics.lead_level_distribution) }"></i></div>
+                <b>{{ item.count }}</b>
+              </div>
+            </div>
+          </section>
+
+          <section class="analytics-card distribution-card">
+            <header><h2>打法分布</h2></header>
+            <div class="rank-list">
+              <div v-for="item in analytics.strategy_distribution" :key="item.label">
+                <span>{{ item.label }}</span>
+                <div><i :style="{ width: bucketPct(item.count, analytics.strategy_distribution) }"></i></div>
+                <b>{{ item.count }}</b>
+              </div>
+            </div>
+          </section>
+
+          <section class="analytics-card distribution-card industry-card">
+            <header><h2>行业分布</h2></header>
+            <div class="rank-list">
+              <div v-for="item in analytics.industry_distribution" :key="item.label">
+                <span>{{ item.label }}</span>
+                <div><i :style="{ width: bucketPct(item.count, analytics.industry_distribution) }"></i></div>
+                <b>{{ item.count }}</b>
+              </div>
+            </div>
+          </section>
+        </div>
         <div v-else class="loading">加载中...</div>
       </div>
 
       <section v-if="adminTab === 'leads'" class="table-section">
         <div class="table-actions">
           <h2>线索列表</h2>
-          <a class="secondary link-button" href="/api/admin/leads/export"><ArrowDownToLine :size="18" /> 导出</a>
+          <div class="table-action-buttons">
+            <button class="secondary" type="button" @click="leadRuleDialogOpen = true"><BookOpen :size="18" /> 评分规则</button>
+            <a class="secondary link-button" href="/api/admin/leads/export"><ArrowDownToLine :size="18" /> 导出</a>
+          </div>
         </div>
-        <table>
-          <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>联系</th><th>等级</th><th>打法</th><th>诉求</th><th>时间</th></tr></thead>
-          <tbody>
-            <tr v-for="lead in leads" :key="lead.id">
-              <td>{{ lead.company_name }}</td>
-              <td>{{ lead.industry }}</td>
-              <td>{{ lead.contact_name }} · {{ lead.position }}</td>
-              <td>{{ lead.phone || lead.wechat }}</td>
-              <td><span class="pill" :class="lead.lead_level">{{ lead.lead_level }}</span></td>
-              <td><span class="pill strategy">{{ lead.priority_strategy || "未判定" }}</span></td>
-              <td class="lead-demand">{{ lead.demand_summary || lead.ai_focus || "未填写" }}</td>
-              <td>{{ new Date(lead.created_at).toLocaleString() }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="lead-toolbar">
+          <label>
+            时间排序
+            <select v-model="leadSortOrder">
+              <option value="newest">最新优先</option>
+              <option value="oldest">最早优先</option>
+            </select>
+          </label>
+          <label>
+            打法
+            <select v-model="leadStrategyFilter">
+              <option v-for="item in leadStrategyOptions" :key="item">{{ item }}</option>
+            </select>
+          </label>
+          <label>
+            行业
+            <select v-model="leadIndustryFilter">
+              <option v-for="item in leadIndustryOptions" :key="item">{{ item }}</option>
+            </select>
+          </label>
+          <label>
+            每页
+            <select v-model.number="leadPageSize">
+              <option :value="10">10 条</option>
+              <option :value="15">15 条</option>
+              <option :value="30">30 条</option>
+              <option :value="50">50 条</option>
+            </select>
+          </label>
+          <div class="lead-count">共 {{ filteredLeads.length }} 条</div>
+        </div>
+        <div class="leads-table-wrap">
+          <table class="leads-table">
+            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>打法</th><th>时间</th></tr></thead>
+            <tbody>
+              <tr v-for="lead in pagedLeads" :key="lead.id">
+                <td :title="lead.company_name || ''">{{ lead.company_name }}</td>
+                <td :title="lead.industry || ''">{{ lead.industry }}</td>
+                <td :title="lead.contact_name || ''">{{ lead.contact_name }}</td>
+                <td :title="lead.position || ''">{{ lead.position }}</td>
+                <td :title="lead.phone || lead.wechat || ''">{{ lead.phone || lead.wechat }}</td>
+                <td><span class="pill" :class="lead.lead_level">{{ lead.lead_level }}</span></td>
+                <td><span class="pill strategy">{{ lead.priority_strategy || "未判定" }}</span></td>
+                <td>{{ new Date(lead.created_at).toLocaleString() }}</td>
+              </tr>
+              <tr v-if="!pagedLeads.length">
+                <td colspan="8" class="empty-cell">暂无符合条件的线索</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <footer class="pagination">
+          <span>显示 {{ leadPageStart }}-{{ leadPageEnd }} / {{ filteredLeads.length }}</span>
+          <div>
+            <button class="secondary" :disabled="leadPage <= 1" @click="goLeadPage(-1)"><ChevronLeft :size="16" /> 上一页</button>
+            <strong>{{ leadPage }} / {{ leadTotalPages }}</strong>
+            <button class="secondary" :disabled="leadPage >= leadTotalPages" @click="goLeadPage(1)">下一页 <ChevronRight :size="16" /></button>
+          </div>
+        </footer>
       </section>
 
       <div v-if="adminTab === 'questions'" class="module-list">
@@ -794,12 +1058,29 @@ onMounted(async () => {
         <label>姓名<input v-model="leadForm.contact_name" required /></label>
         <label>职位<input v-model="leadForm.position" required /></label>
         <label>手机号<input v-model="leadForm.phone" inputmode="numeric" maxlength="11" placeholder="请输入 11 位手机号" @input="syncPhoneWechat" /></label>
-        <label>接收报告邮箱<input v-model="leadForm.email" type="email" required placeholder="name@example.com" /></label>
+        <label>
+          接收报告邮箱
+          <input v-model="leadForm.email" type="email" required placeholder="name@example.com" />
+          <span class="field-hint">请填写真实可收信邮箱，完整诊断报告和生成文件会发送到这里。</span>
+        </label>
         <label>微信<input v-model="leadForm.wechat" placeholder="选填" /></label>
         <label class="check wide" style="border:none;background:none;padding:0;margin-top:-8px">
           <input v-model="phoneWechatSame" type="checkbox" @change="syncPhoneWechat" /> 微信与手机同号
         </label>
-        <label class="wide">当前 AI 转型关注点<textarea v-model="leadForm.ai_focus" /></label>
+        <fieldset class="focus-field wide">
+          <legend>当前 AI 转型关注点</legend>
+          <p>可以多选，选择最接近当前诉求的方向即可。</p>
+          <div class="focus-options">
+            <label v-for="item in aiFocusOptions" :key="item" class="focus-option">
+              <input v-model="selectedAiFocus" type="checkbox" :value="item" />
+              <span>{{ item }}</span>
+            </label>
+          </div>
+          <label class="focus-other">
+            其他补充
+            <input v-model="aiFocusOther" placeholder="例如：想先了解 AI 项目投入预算、落地周期等" />
+          </label>
+        </fieldset>
         <label class="check wide"><input v-model="leadForm.privacy_accepted" type="checkbox" /> 我同意用于生成诊断报告和后续顾问联系</label>
         <button class="primary wide" :disabled="busy">{{ busy ? "提交中..." : "进入问卷" }}</button>
       </form>
@@ -834,20 +1115,27 @@ onMounted(async () => {
         </div>
 
         <div class="question-list">
-          <div v-for="(question, qIndex) in currentModule.questions" :key="question.id" class="question-row">
+          <div v-for="(question, qIndex) in currentModule.questions" :id="`question-${question.id}`" :key="question.id" class="question-row">
             <div class="question-copy">
               <p class="question-text">{{ getGlobalIndex(currentModule, qIndex) }}. {{ question.text }}</p>
               <div class="score-options">
-                <button
+                <label
                   v-for="label in parseOptionLabels(question.option_text)"
                   :key="label.value"
-                  type="button"
-                  :class="{ selected: answers[question.id] === label.value }"
-                  @click="selectAnswer(question.id, label.value)"
+                  class="score-option"
+                  :class="{ selected: isAnswerSelected(question.id, label.value) }"
                 >
+                  <input
+                    class="score-radio"
+                    type="radio"
+                    :name="`question-${question.id}`"
+                    :checked="isAnswerSelected(question.id, label.value)"
+                    @change="selectAnswer(question.id, label.value)"
+                  />
                   <span class="option-score">{{ label.value }}</span>
                   <span class="option-label">{{ label.label }}</span>
-                </button>
+                  <span class="option-check"><Check :size="16" /></span>
+                </label>
               </div>
             </div>
           </div>
@@ -857,7 +1145,7 @@ onMounted(async () => {
           <button class="secondary" :disabled="moduleIndex === 0" @click="goPrevModule"><ChevronLeft :size="18" /> 上一组</button>
           <span class="step-hint">{{ moduleIndex + 1 }} / {{ modules.length }}</span>
           <button v-if="moduleIndex < modules.length - 1" class="primary" @click="goNextModule">下一组 <ChevronRight :size="18" /></button>
-          <button v-else class="primary" :disabled="busy || answeredCount < questions.length" @click="submitQuestionnaire">
+          <button v-else class="primary" :disabled="busy" @click="submitQuestionnaire">
             {{ busy ? "提交中..." : answeredCount < questions.length ? `还剩 ${questions.length - answeredCount} 题未答` : "提交并邮件领取报告" }}
           </button>
         </footer>
@@ -932,4 +1220,36 @@ onMounted(async () => {
       </div>
     </form>
   </div>
+
+  <div v-if="leadRuleDialogOpen" class="modal-backdrop" @click.self="leadRuleDialogOpen = false">
+    <section class="rule-dialog" role="dialog" aria-modal="true" aria-labelledby="lead-rule-title">
+      <header>
+        <h2 id="lead-rule-title">线索评分规则</h2>
+        <button class="secondary" type="button" @click="leadRuleDialogOpen = false">关闭</button>
+      </header>
+
+      <div class="rule-block">
+        <h3>等级：跟进优先级</h3>
+        <p>等级用于判断客户是否值得优先联系，不等同于诊断报告里的成熟度等级。</p>
+        <ul>
+          <li><strong>HIGH 高意向：</strong>客户填写了手机号或微信，并且至少 2 个诊断维度得分率低于 50%。说明客户有联系方式，且短板较明显，建议优先跟进。</li>
+          <li><strong>MEDIUM 中意向：</strong>客户填写了手机号或微信，但低分维度不足 2 个。说明可以正常跟进，但优先级低于 HIGH。</li>
+          <li><strong>LOW 低意向：</strong>客户没有填写手机号和微信。当前前端已要求手机号或微信至少填写一项，因此 LOW 多见于旧数据或测试数据。</li>
+        </ul>
+      </div>
+
+      <div class="rule-block">
+        <h3>打法：建议跟进方式</h3>
+        <ul>
+          <li><strong>升维战：</strong>综合得分率大于等于 75%。说明企业基础较好，适合做跨部门规模化、经营升级类 AI 项目。</li>
+          <li><strong>攻坚战：</strong>综合得分率低于 50%，或低分维度数量大于等于 4 个。说明基础短板较多，需要先补业务、流程、数据或组织基础。</li>
+          <li><strong>闪电战：</strong>综合得分没有明显偏低，并且客户填写了明确 AI 诉求。适合先从一个小场景快速试点，比如客服提效、流程自动化、知识库问答。</li>
+          <li><strong>默认攻坚战：</strong>如果不满足以上条件，系统默认按攻坚战处理，避免过早承诺快速落地。</li>
+        </ul>
+      </div>
+
+      <p class="rule-note">当前规则是首版自动判定逻辑，后续可以继续加入企业规模、年营收、行业权重、职位角色等因素，让线索优先级更贴近真实销售判断。</p>
+    </section>
+  </div>
+
 </template>

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus
 from app.service.email_service import send_report_pdf_email
-from app.service.pdf_service import render_report_pdf_bytes
+from app.service.pdf_service import render_report_html_attachment, render_report_pdf_bytes, report_public_url
 from app.service.reporting import generate_report_content
 
 logger = logging.getLogger(__name__)
@@ -107,17 +107,22 @@ async def process_report_delivery_job(job_id: int) -> bool:
             db.commit()
             return True
 
-        report.status = ReportStatus.generating.value
-        db.commit()
-        db.refresh(report)
-
-        await generate_report_content(db, report)
-        pdf = render_report_pdf_bytes(report)
+        if not (report.status in {ReportStatus.generated.value, ReportStatus.fallback.value} and report.html_content):
+            report.status = ReportStatus.generating.value
+            db.commit()
+            db.refresh(report)
+            await generate_report_content(db, report)
+        pdf = await render_report_pdf_bytes(report)
+        html = render_report_html_attachment(report)
+        report_url = report_public_url(report)
         send_report_pdf_email(
             job.recipient_email,
             report.title,
             pdf,
             f"diagnosis-report-{report.public_token}.pdf",
+            report_url=report_url,
+            html_bytes=html,
+            html_filename=f"diagnosis-report-{report.public_token}.html",
         )
 
         job.status = ReportDeliveryStatus.sent.value

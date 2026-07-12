@@ -263,6 +263,17 @@ class CaseStudyCreate(BaseModel):
 
 
 # ── 统计 ──────────────────────────────────────────────────────────
+class AnalyticsBucket(BaseModel):
+    label: str
+    count: int
+
+
+class AnalyticsFunnelStep(BaseModel):
+    label: str
+    count: int
+    rate: float
+
+
 class AnalyticsSummary(BaseModel):
     """后台统计看板数据 — 展示客户转化漏斗"""
     visit_uv: int = Field(description="独立访客数")
@@ -273,6 +284,12 @@ class AnalyticsSummary(BaseModel):
     report_claimed_count: int = Field(description="下载 PDF 数")
     high_intent_leads: int = Field(description="高意向线索数：有联系方式+至少 2 个维度得分率 < 50%")
     lead_count: int = Field(description="线索总数")
+    questionnaire_completion_rate: float = Field(default=0, description="答题完成率：问卷完成 / 信息完成")
+    funnel: list[AnalyticsFunnelStep] = Field(default_factory=list, description="转化漏斗")
+    hourly_questionnaire_counts: list[AnalyticsBucket] = Field(default_factory=list, description="按小时统计的问卷完成人数")
+    lead_level_distribution: list[AnalyticsBucket] = Field(default_factory=list, description="线索等级分布")
+    strategy_distribution: list[AnalyticsBucket] = Field(default_factory=list, description="打法分布")
+    industry_distribution: list[AnalyticsBucket] = Field(default_factory=list, description="行业分布")
 
 
 # ── 埋点 ──────────────────────────────────────────────────────────

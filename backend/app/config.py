@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     report_generation_concurrency: int = Field(default=5, description="每个后端进程内允许同时生成报告的数量")
 
     # ── PDF ──
-    pdf_browser_render: bool = Field(default=False, description="是否用浏览器渲染 PDF（暂未启用）")
+    pdf_browser_render: bool = Field(default=False, description="是否用浏览器打开公开报告页并打印为 PDF")
+    pdf_browser_executable: str | None = Field(default=None, description="可选：Chrome/Edge/Chromium 可执行文件路径")
 
     # ── 邮件 ──
     smtp_host: str | None = Field(default=None, description="SMTP 服务器地址，不配置则无法发送报告邮件")
