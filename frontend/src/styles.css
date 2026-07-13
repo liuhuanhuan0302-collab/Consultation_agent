@@ -1105,6 +1105,72 @@ textarea:focus {
   margin-bottom: 28px;
 }
 
+.ai-problem-panel {
+  background: #fff;
+  border: 1px solid #d7dee8;
+  border-left: 4px solid #176b87;
+  border-radius: 8px;
+  margin: 0 0 22px;
+  padding: 20px 22px;
+}
+
+.ai-problem-panel header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ai-problem-panel .eyebrow {
+  color: #176b87;
+  font-size: 11px;
+  margin: 0 0 4px;
+}
+
+.ai-problem-panel h2 {
+  color: #0f172a;
+  font-size: 20px;
+  margin: 0;
+}
+
+.ai-problem-panel header > span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.ai-problem-summary {
+  color: #475569;
+  line-height: 1.65;
+  margin: 14px 0;
+}
+
+.ai-problem-ai-text {
+  background: #f8fafc;
+  border-left: 2px solid #94a3b8;
+  padding: 10px 12px;
+}
+
+.ai-problem-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ai-problem-list article {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e5eaf0;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  min-height: 72px;
+  padding: 12px;
+}
+
+.problem-order { color: #176b87; font-size: 13px; font-weight: 800; }
+.ai-problem-list strong { color: #1e293b; display: block; font-size: 14px; }
+.ai-problem-list p { color: #64748b; font-size: 12px; margin: 4px 0 0; }
+.ai-problem-list b { color: #b45309; font-size: 20px; }
+
 .score-card {
   position: relative;
   background: #fff;

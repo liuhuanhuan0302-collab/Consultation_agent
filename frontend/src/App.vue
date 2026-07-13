@@ -12,7 +12,6 @@ import {
   LayoutDashboard,
   Lock,
   LogOut,
-  Mail,
   Plus,
   QrCode,
   ShieldCheck,
@@ -71,10 +70,6 @@ const error = ref("");
 const adminNotice = ref("");
 const busy = ref(false);
 const draftSaved = ref(false);
-const emailDialogOpen = ref(false);
-const reportEmail = ref("");
-const emailSending = ref(false);
-const emailNotice = ref("");
 const reportWaitSeconds = ref(0);
 const reportPollTimer = ref<number | null>(null);
 const reportWaitTimer = ref<number | null>(null);
@@ -595,6 +590,24 @@ const reportScore = computed(() => {
 });
 const reportHtml = computed(() => normalizeReportHtml(activeReport.value?.html_content || ""));
 const pdfToken = computed(() => activeReport.value?.public_token || "");
+const currentProblemAnalysis = computed(() => {
+  const lowDimensions = activeReport.value?.low_dimensions?.length
+    ? activeReport.value.low_dimensions
+    : [...chartDimensions.value].sort((a, b) => a.score_rate - b.score_rate).slice(0, 3);
+  return lowDimensions.map((item) => ({
+    name: item.module_name,
+    scoreRate: Math.round(item.score_rate * 100),
+    riskLevel: item.risk_level || "需优先关注"
+  }));
+});
+const reportDemandSummary = computed(() => activeReport.value?.customer_classification?.demand_summary || "");
+const aiProblemAnalysis = computed(() => {
+  const content = activeReport.value?.advisor_messages?.find((message) => message.role === "assistant")?.content?.trim() || "";
+  if (!content) return "";
+  const matched = content.match(/(?:^|\n)#{0,3}\s*AI\s*当前问题分析\s*[:：]?\s*\n?([\s\S]*?)(?=\n#{1,3}\s|\n(?:管理摘要|关键短板|优先 AI 场景|下一步建议)\s*[:：]|$)/i);
+  return (matched?.[1] || content).trim().slice(0, 1800);
+});
+const aiProblemAnalysisHtml = computed(() => escapeHtmlText(aiProblemAnalysis.value).replace(/\n/g, "<br>"));
 const leadDetailReportHtml = computed(() => normalizeReportHtml(selectedLeadDetail.value?.report?.html_content || ""));
 const selectedLeadScoreRate = computed(() => {
   const rate = selectedLeadDetail.value?.submission?.score_rate;
@@ -622,34 +635,6 @@ const leadPageEnd = computed(() => Math.min(leadPageStart.value + leadPageSize.v
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
-
-function openEmailDialog() {
-  emailNotice.value = "";
-  error.value = "";
-  reportEmail.value = "";
-  emailDialogOpen.value = true;
-}
-
-async function sendReportToEmail() {
-  if (!pdfToken.value) return;
-  const email = reportEmail.value.trim();
-  emailNotice.value = "";
-  error.value = "";
-  if (!isValidEmail(email)) {
-    error.value = "请输入正确的邮箱地址";
-    return;
-  }
-  emailSending.value = true;
-  try {
-    await api.emailReport(pdfToken.value, email);
-    emailNotice.value = "报告已发送到邮箱，请注意查收";
-    emailDialogOpen.value = false;
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : "发送失败";
-  } finally {
-    emailSending.value = false;
-  }
 }
 
 function escapeHtmlText(value: string): string {
@@ -1129,11 +1114,7 @@ onBeforeUnmount(clearReportPolling);
             <span>{{ formatDate(publicReport.created_at) }}</span>
           </div>
         </div>
-        <button class="hero-pdf-btn" type="button" @click="openEmailDialog">
-          <Mail :size="18" /> 发送到邮箱
-        </button>
       </header>
-      <div v-if="emailNotice" class="success-alert">{{ emailNotice }}</div>
 
       <!-- Score Cards -->
       <div v-if="reportScore" class="score-strip">
@@ -1155,6 +1136,22 @@ onBeforeUnmount(clearReportPolling);
           </div>
         </div>
       </div>
+
+      <section v-if="currentProblemAnalysis.length" class="ai-problem-panel">
+        <header>
+          <div><p class="eyebrow">AI Analysis</p><h2>AI 当前问题分析</h2></div>
+          <span>基于本次答题结果</span>
+        </header>
+        <div v-if="aiProblemAnalysis" class="ai-problem-summary ai-problem-ai-text" v-html="aiProblemAnalysisHtml" />
+        <p v-else class="ai-problem-summary">{{ reportDemandSummary || "正在基于本次答题结果生成企业问题分析。" }}</p>
+        <div class="ai-problem-list">
+          <article v-for="(item, index) in currentProblemAnalysis" :key="item.name">
+            <span class="problem-order">0{{ index + 1 }}</span>
+            <div><strong>{{ item.name }}</strong><p>{{ item.riskLevel }}</p></div>
+            <b>{{ item.scoreRate }}%</b>
+          </article>
+        </div>
+      </section>
 
       <!-- Charts -->
       <ReportCharts v-if="chartDimensions.length" :dimensions="chartDimensions" />
@@ -1312,11 +1309,7 @@ onBeforeUnmount(clearReportPolling);
               <span>{{ formatDate(reportDate) }}</span>
             </div>
           </div>
-          <button class="hero-pdf-btn" type="button" @click="openEmailDialog">
-            <Mail :size="18" /> 发送到邮箱
-          </button>
         </header>
-        <div v-if="emailNotice" class="success-alert">{{ emailNotice }}</div>
 
         <!-- Score Cards -->
         <div v-if="reportScore" class="score-strip">
@@ -1339,6 +1332,22 @@ onBeforeUnmount(clearReportPolling);
           </div>
         </div>
 
+        <section v-if="currentProblemAnalysis.length" class="ai-problem-panel">
+          <header>
+            <div><p class="eyebrow">AI Analysis</p><h2>AI 当前问题分析</h2></div>
+            <span>基于本次答题结果</span>
+          </header>
+          <div v-if="aiProblemAnalysis" class="ai-problem-summary ai-problem-ai-text" v-html="aiProblemAnalysisHtml" />
+          <p v-else class="ai-problem-summary">{{ reportDemandSummary || "正在基于本次答题结果生成企业问题分析。" }}</p>
+          <div class="ai-problem-list">
+            <article v-for="(item, index) in currentProblemAnalysis" :key="item.name">
+              <span class="problem-order">0{{ index + 1 }}</span>
+              <div><strong>{{ item.name }}</strong><p>{{ item.riskLevel }}</p></div>
+              <b>{{ item.scoreRate }}%</b>
+            </article>
+          </div>
+        </section>
+
         <!-- Charts -->
         <ReportCharts :dimensions="chartDimensions" />
 
@@ -1347,18 +1356,6 @@ onBeforeUnmount(clearReportPolling);
       </section>
     </section>
   </main>
-
-  <div v-if="emailDialogOpen" class="modal-backdrop" @click.self="emailDialogOpen = false">
-    <form class="email-dialog" @submit.prevent="sendReportToEmail">
-      <h2>发送完整报告</h2>
-      <p>请输入接收邮箱，系统会将 PDF 报告发送到该邮箱。</p>
-      <label>邮箱地址<input v-model="reportEmail" type="email" required placeholder="name@example.com" /></label>
-      <div class="dialog-actions">
-        <button type="button" class="secondary" @click="emailDialogOpen = false">取消</button>
-        <button class="primary" :disabled="emailSending">{{ emailSending ? "发送中..." : "发送报告" }}</button>
-      </div>
-    </form>
-  </div>
 
   <div v-if="leadDetailOpen" class="modal-backdrop" @click.self="leadDetailOpen = false">
     <section class="lead-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="lead-detail-title">
