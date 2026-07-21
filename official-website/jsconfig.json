@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "ES2022"],
+    "types": ["vite/client"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "main.js",
+    "config.js",
+    "components/**/*.js",
+    "adapters/**/*.js",
+    "services/**/*.js",
+    "types/**/*.js",
+    "ui/**/*.js",
+    "utils/**/*.js"
+  ]
+}
