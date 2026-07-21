@@ -2,6 +2,13 @@ import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, Ques
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("admin_token");
   const headers: Record<string, string> = {
@@ -14,7 +21,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || `请求失败：${response.status}`);
+    throw new ApiError(response.status, payload.detail || `请求失败：${response.status}`);
   }
   return response.json();
 }

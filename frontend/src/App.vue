@@ -19,7 +19,7 @@ import {
   Trash2,
   Users
 } from "lucide-vue-next";
-import { api } from "./api";
+import { ApiError, api } from "./api";
 import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, QuestionModule, Report, ScoreResponse, User } from "./types";
 import ReportCharts from "./components/ReportCharts.vue";
 
@@ -529,21 +529,33 @@ async function loginAdmin() {
 }
 
 async function loadAdminShell() {
-  adminUser.value = await api.me();
-  await loadAdminTab("overview");
+  try {
+    adminUser.value = await api.me();
+    await loadAdminTab("overview");
+  } catch (err) {
+    if (!handleAdminRequestError(err)) {
+      error.value = err instanceof Error ? err.message : "加载后台失败";
+    }
+  }
 }
 
 async function loadAdminTab(tab: AdminTab) {
-  adminTab.value = tab;
-  if (tab === "overview") analytics.value = await api.analytics();
-  if (tab === "leads") {
-    leads.value = await api.leads();
-    resetLeadPage();
+  try {
+    adminTab.value = tab;
+    if (tab === "overview") analytics.value = await api.analytics();
+    if (tab === "leads") {
+      leads.value = await api.leads();
+      resetLeadPage();
+    }
+    if (tab === "questions") adminQuestions.value = await api.adminQuestions();
+    if (tab === "cases") cases.value = await api.cases();
+    if (tab === "users") users.value = await api.users().catch(() => []);
+    if (tab === "channels") channels.value = await api.channels().catch(() => []);
+  } catch (err) {
+    if (!handleAdminRequestError(err)) {
+      error.value = err instanceof Error ? err.message : "加载后台数据失败";
+    }
   }
-  if (tab === "questions") adminQuestions.value = await api.adminQuestions();
-  if (tab === "cases") cases.value = await api.cases();
-  if (tab === "users") users.value = await api.users().catch(() => []);
-  if (tab === "channels") channels.value = await api.channels().catch(() => []);
 }
 
 function resetLeadPage() {
@@ -570,9 +582,28 @@ async function openLeadDetail(lead: Lead) {
 }
 
 function logoutAdmin() {
+  clearAdminSession();
+}
+
+function clearAdminSession(message = "") {
   localStorage.removeItem("admin_token");
   adminToken.value = null;
   adminUser.value = null;
+  analytics.value = null;
+  leads.value = [];
+  adminQuestions.value = [];
+  cases.value = [];
+  users.value = [];
+  channels.value = [];
+  if (message) error.value = message;
+}
+
+function handleAdminRequestError(err: unknown): boolean {
+  if (err instanceof ApiError && err.status === 401) {
+    clearAdminSession("登录状态已失效，请重新登录。");
+    return true;
+  }
+  return false;
 }
 
 const chartDimensions = computed(() => {
