@@ -83,8 +83,9 @@ MYSQL_PASSWORD=另一个强密码
 DATABASE_URL=mysql+pymysql://consult_agent:同MYSQL_PASSWORD@mysql:3306/consultation_agent?charset=utf8mb4
 SECRET_KEY=一个随机长字符串
 DEEPSEEK_API_KEY=你的DeepSeek密钥
-PUBLIC_WEB_BASE_URL=http://你的服务器公网IP
+PUBLIC_WEB_BASE_URL=http://你的服务器公网IP/diagnosis
 CORS_ORIGINS=http://你的服务器公网IP
+SITE_ADDRESS=http://你的服务器公网IP
 ```
 
 生成 `SECRET_KEY`：
@@ -133,16 +134,22 @@ docker compose logs -f frontend
 
 ## 6. 访问测试
 
-浏览器打开：
+官网：
 
 ```text
 http://你的服务器公网IP
 ```
 
+诊断系统：
+
+```text
+http://你的服务器公网IP/diagnosis/
+```
+
 后台：
 
 ```text
-http://你的服务器公网IP/admin
+http://你的服务器公网IP/diagnosis/admin
 ```
 
 接口健康检查：
@@ -159,17 +166,30 @@ curl http://你的服务器公网IP/api/health
 
 ## 7. 二维码地址
 
-没有域名时，二维码会使用：
+域名尚未完成 ICP 备案时，请先使用服务器公网 IP：
 
 ```env
-PUBLIC_WEB_BASE_URL=http://你的服务器公网IP
+PUBLIC_WEB_BASE_URL=http://8.138.165.2/diagnosis
 ```
+
+阿里云安全组需要放行 TCP 80。此阶段二维码和访问地址都使用 IP，微信内访问会显示 IP 地址提醒，这是平台行为，无法由项目代码消除。
+
+完成 ICP 备案、域名解析生效后，再改为：
+
+```env
+PUBLIC_WEB_BASE_URL=https://youyuexinxi.com.cn/diagnosis
+CORS_ORIGINS=https://youyuexinxi.com.cn
+SITE_ADDRESS=youyuexinxi.com.cn
+```
+
+同时开放 TCP 443；Caddy 会依据 `SITE_ADDRESS` 自动申请 HTTPS 证书。
 
 之后如果换域名，需要改成：
 
 ```env
-PUBLIC_WEB_BASE_URL=https://你的域名
+PUBLIC_WEB_BASE_URL=https://你的域名/diagnosis
 CORS_ORIGINS=https://你的域名
+SITE_ADDRESS=你的域名
 ```
 
 然后重启：
@@ -182,10 +202,13 @@ docker compose up -d
 
 ## 8. 重要提醒
 
-安全组只开放：
+当前使用 IP 临时访问时，安全组只开放：
 
 - 22
 - 80
+
+完成备案并切回 HTTPS 域名后，再开放：
+
 - 443
 
 不要开放：

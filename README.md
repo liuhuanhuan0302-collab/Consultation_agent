@@ -38,7 +38,7 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-前端：
+诊断系统前端：
 
 ```powershell
 cd frontend
@@ -46,10 +46,19 @@ npm install
 npm run dev
 ```
 
+官网前端（另开一个终端）：
+
+```powershell
+cd official-website
+npm install
+npm run dev -- --port 5174
+```
+
 访问：
 
-- 客户端：http://localhost:5173
-- 后台：http://localhost:5173/admin
+- 本地官网：http://localhost:5174
+- 本地诊断系统：http://localhost:5173
+- 本地后台：http://localhost:5173/admin
 - 默认账号：admin@example.com
 - 默认密码：Admin123!
 
@@ -61,8 +70,9 @@ npm run dev
 DATABASE_URL=mysql+pymysql://user:password@host:3306/consultation_agent?charset=utf8mb4
 DEEPSEEK_API_KEY=你的 DeepSeek Key
 SECRET_KEY=生产随机密钥
-PUBLIC_WEB_BASE_URL=https://你的域名
+PUBLIC_WEB_BASE_URL=https://你的域名/diagnosis
 CORS_ORIGINS=https://你的域名
+SITE_ADDRESS=你的域名
 ```
 
 Docker 部署时填写根目录 `.env.production`，然后运行：
@@ -72,6 +82,12 @@ docker compose up -d --build
 ```
 
 后端镜像已内置正式 68 题题库，生产空库首次启动会自动创建正式题库、默认渠道和默认管理员。
+
+生产环境统一入口：
+
+- 官网：`https://你的域名/`
+- 诊断系统：`https://你的域名/diagnosis/`
+- 后台：`https://你的域名/diagnosis/admin`
 
 ## 内容维护
 

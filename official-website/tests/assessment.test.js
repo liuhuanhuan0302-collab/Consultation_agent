@@ -16,7 +16,9 @@ test("AI 能力测评位于解决方案和转型路径之间", () => {
 });
 
 test("AI 能力测评使用有效链接和本地二维码资源", () => {
-  assert.doesNotThrow(() => new URL(DIAGNOSIS_URL));
+  const diagnosisUrl = new URL(DIAGNOSIS_URL, "https://youyuexinxi.com.cn");
+  assert.equal(diagnosisUrl.pathname, "/diagnosis/");
+  assert.equal(diagnosisUrl.searchParams.get("source"), "OFFICIAL_WEBSITE");
   assert.match(html, /data-component="AiAssessmentSection"/);
   assert.match(html, /assets\/ai-assessment-qr\.png/);
 });

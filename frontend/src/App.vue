@@ -53,8 +53,16 @@ const aiFocusOptions = [
   "想先判断公司适合从哪些 AI 场景开始"
 ];
 
-const isAdmin = window.location.pathname.startsWith("/admin");
-const reportToken = window.location.pathname.match(/^\/report\/([^/]+)/)?.[1] || "";
+const appBasePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+const appPathname = window.location.pathname.startsWith(appBasePath)
+  ? window.location.pathname.slice(appBasePath.length) || "/"
+  : window.location.pathname;
+const isAdmin = appPathname.startsWith("/admin");
+const reportToken = appPathname.match(/^\/report\/([^/]+)/)?.[1] || "";
+
+function appUrl(path: string) {
+  return `${appBasePath}${path}` || path;
+}
 
 const step = ref<Step>("intro");
 const sessionToken = ref<string | null>(localStorage.getItem("diagnosis_session"));
@@ -280,7 +288,7 @@ function openReportPage(token: string) {
   clearReportPolling();
   localStorage.setItem("diagnosis_report_token", token);
   localStorage.removeItem("diagnosis_step");
-  window.location.assign(`/report/${token}`);
+  window.location.assign(appUrl(`/report/${token}`));
 }
 
 async function checkSubmittedReport(): Promise<boolean> {

@@ -48,10 +48,21 @@ services:
       - app_net
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_APP_BASE_PATH: /diagnosis/
+        VITE_DIAGNOSIS_URL: /diagnosis/?source=OFFICIAL_WEBSITE
     restart: unless-stopped
+    env_file:
+      - .env.production
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - backend
     networks:
@@ -60,6 +71,8 @@ services:
 volumes:
   mysql_data:
   backend_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   app_net:

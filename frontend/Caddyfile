@@ -1,0 +1,22 @@
+{$SITE_ADDRESS:http://8.138.165.2} {
+    encode zstd gzip
+
+    @api path /api/*
+    handle @api {
+        reverse_proxy backend:8000
+    }
+
+    redir /diagnosis /diagnosis/ permanent
+
+    handle_path /diagnosis/* {
+        root * /srv/diagnosis
+        try_files {path} /index.html
+        file_server
+    }
+
+    handle {
+        root * /srv/official
+        try_files {path} /index.html
+        file_server
+    }
+}
