@@ -85,7 +85,6 @@ SECRET_KEY=一个随机长字符串
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 PUBLIC_WEB_BASE_URL=http://你的服务器公网IP/diagnosis
 CORS_ORIGINS=http://你的服务器公网IP
-SITE_ADDRESS=http://你的服务器公网IP
 ```
 
 生成 `SECRET_KEY`：
@@ -112,6 +111,15 @@ cd /opt/consultation_agent
 docker compose up -d --build
 ```
 
+当前服务器由系统 Nginx 对外监听 80 端口，Docker 前端只监听本机 `127.0.0.1:8080`。首次部署或更新后，还需要启用项目内的 Nginx 转发配置：
+
+```bash
+sudo cp deploy/nginx/consultation-agent.conf /etc/nginx/sites-available/consultation-agent
+sudo ln -sfn /etc/nginx/sites-available/consultation-agent /etc/nginx/sites-enabled/consultation-agent
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
 第一次启动后初始化数据库：
 
 ```bash
@@ -130,6 +138,12 @@ docker compose ps
 docker compose logs -f backend
 docker compose logs -f report_worker
 docker compose logs -f frontend
+```
+
+确认 Docker 前端在本机可访问：
+
+```bash
+curl -I http://127.0.0.1:8080/
 ```
 
 ## 6. 访问测试
@@ -179,17 +193,15 @@ PUBLIC_WEB_BASE_URL=http://8.138.165.2/diagnosis
 ```env
 PUBLIC_WEB_BASE_URL=https://youyuexinxi.com.cn/diagnosis
 CORS_ORIGINS=https://youyuexinxi.com.cn
-SITE_ADDRESS=youyuexinxi.com.cn
 ```
 
-同时开放 TCP 443；Caddy 会依据 `SITE_ADDRESS` 自动申请 HTTPS 证书。
+同时开放 TCP 443，并在系统 Nginx 中配置 HTTPS 证书；Docker 内的 Caddy 只负责站点和接口路由。
 
 之后如果换域名，需要改成：
 
 ```env
 PUBLIC_WEB_BASE_URL=https://你的域名/diagnosis
 CORS_ORIGINS=https://你的域名
-SITE_ADDRESS=你的域名
 ```
 
 然后重启：

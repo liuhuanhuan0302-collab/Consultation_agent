@@ -1,4 +1,4 @@
-{$SITE_ADDRESS:http://8.138.165.2} {
+:80 {
     encode zstd gzip
 
     @api path /api/*

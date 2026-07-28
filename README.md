@@ -72,7 +72,6 @@ DEEPSEEK_API_KEY=你的 DeepSeek Key
 SECRET_KEY=生产随机密钥
 PUBLIC_WEB_BASE_URL=https://你的域名/diagnosis
 CORS_ORIGINS=https://你的域名
-SITE_ADDRESS=你的域名
 ```
 
 Docker 部署时填写根目录 `.env.production`，然后运行：
@@ -88,6 +87,8 @@ docker compose up -d --build
 - 官网：`https://你的域名/`
 - 诊断系统：`https://你的域名/diagnosis/`
 - 后台：`https://你的域名/diagnosis/admin`
+
+服务器若已由系统 Nginx 占用 80 端口，Docker 前端会监听 `127.0.0.1:8080`，再由 Nginx 反向代理到该地址；配置模板位于 `deploy/nginx/consultation-agent.conf`。
 
 ## 内容维护
 
