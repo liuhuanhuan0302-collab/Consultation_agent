@@ -16,13 +16,14 @@ import csv
 import json
 from io import StringIO
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import (
     AiConversationMessage,
@@ -48,6 +49,7 @@ from app.schemas import (
     MessageResponse,
     ModuleRead,
     ModuleUpsert,
+    PasswordChangeRequest,
     QuestionRead,
     QuestionUpsert,
     TokenResponse,
@@ -85,25 +87,49 @@ router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
 
+def escape_csv_cell(value: object | None) -> object | None:
+    """将可能被 Excel 解释为公式的客户输入强制导出为文本。"""
+    if isinstance(value, str) and value.lstrip(" \t\r\n").startswith(("=", "+", "-", "@")):
+        return f"'{value}"
+    return value
+
+
 # ══════════════════════════════════════════════════════════════════
 # 3.1 后台登录
 # ══════════════════════════════════════════════════════════════════
 # 方法：POST
 # 路径：/api/admin/auth/login
-# 功能：后台用户登录，校验邮箱密码，返回 JWT access_token
+# 功能：后台用户登录，校验邮箱密码，写入 HttpOnly 会话 Cookie
 #       密码使用 pbkdf2_sha256 哈希校验
 # 限流：同一 IP 每分钟最多 5 次（防暴力破解）
 # 鉴权：无
 # 请求：{ email: string, password: string }
-# 返回：{ access_token: string, token_type: "bearer" }
+# 返回：{ message: "登录成功" }
 # 错误：401 "账号或密码错误"
-@router.post("/api/admin/auth/login", response_model=TokenResponse)
+@router.post("/api/admin/auth/login", response_model=MessageResponse)
 @limiter.limit("5/minute")
-def admin_login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def admin_login(request: Request, payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> MessageResponse:
     user = get_active_user_by_email(db, payload.email)
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或密码错误")
-    return TokenResponse(access_token=create_access_token(str(user.id), {"role": user.role.value if hasattr(user.role, "value") else user.role}))
+    settings = get_settings()
+    token = create_access_token(str(user.id), {"role": user.role.value if hasattr(user.role, "value") else user.role})
+    response.set_cookie(
+        key=settings.admin_session_cookie_name,
+        value=token,
+        max_age=settings.access_token_expire_minutes * 60,
+        httponly=True,
+        secure=settings.environment.lower() == "production",
+        samesite="lax",
+        path="/api/admin",
+    )
+    return MessageResponse(message="登录成功")
+
+
+@router.post("/api/admin/auth/logout", response_model=MessageResponse)
+def admin_logout(response: Response) -> MessageResponse:
+    response.delete_cookie(key=get_settings().admin_session_cookie_name, path="/api/admin", samesite="lax")
+    return MessageResponse(message="已退出登录")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -121,7 +147,26 @@ def admin_me(user: User = Depends(get_current_user)) -> User:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 3.3 创建后台用户
+# 3.3 修改当前登录用户密码
+# ══════════════════════════════════════════════════════════════════
+@router.post("/api/admin/auth/change-password", response_model=MessageResponse)
+def change_current_password(
+    payload: PasswordChangeRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MessageResponse:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码错误")
+    user.password_hash = hash_password(payload.new_password)
+    write_operation_log(db, user, "change_own_password", "user", str(user.id))
+    db.commit()
+    response.delete_cookie(key=get_settings().admin_session_cookie_name, path="/api/admin", samesite="lax")
+    return MessageResponse(message="密码已更新，请重新登录")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 3.4 创建后台用户
 # ══════════════════════════════════════════════════════════════════
 # 方法：POST
 # 路径：/api/admin/users
@@ -197,19 +242,19 @@ def export_leads(db: Session = Depends(get_db), user: User = Depends(LeadExporte
     for lead in leads:
         writer.writerow(
             [
-                lead.company_name,
-                lead.industry,
-                lead.company_size,
-                lead.contact_name,
-                lead.position,
-                lead.phone,
-                lead.email,
-                lead.wechat,
-                lead.source_code,
-                lead.lead_level,
-                lead.priority_strategy,
-                lead.demand_summary,
-                lead.created_at.isoformat(),
+                escape_csv_cell(lead.company_name),
+                escape_csv_cell(lead.industry),
+                escape_csv_cell(lead.company_size),
+                escape_csv_cell(lead.contact_name),
+                escape_csv_cell(lead.position),
+                escape_csv_cell(lead.phone),
+                escape_csv_cell(lead.email),
+                escape_csv_cell(lead.wechat),
+                escape_csv_cell(lead.source_code),
+                escape_csv_cell(lead.lead_level),
+                escape_csv_cell(lead.priority_strategy),
+                escape_csv_cell(lead.demand_summary),
+                escape_csv_cell(lead.created_at.isoformat()),
             ]
         )
     db.add(ExportLog(user_id=user.id, export_type="leads", filters_json=None, rows_count=len(leads)))

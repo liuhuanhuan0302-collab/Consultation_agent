@@ -165,7 +165,6 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
             "--disable-background-networking",
             "--disable-sync",
             "--disable-dev-shm-usage",
-            "--no-sandbox",
             "--no-first-run",
             "--no-default-browser-check",
             "--hide-scrollbars",

@@ -11,9 +11,16 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+RUN groupadd --system app && useradd --system --gid app --create-home --home-dir /home/app app
 
-RUN mkdir -p /app/data
+COPY --chown=app:app . .
+
+RUN mkdir -p /app/data && chown -R app:app /app/data
+
+ENV HOME=/home/app \
+    XDG_CACHE_HOME=/tmp/.cache
+
+USER app
 
 EXPOSE 8000
 

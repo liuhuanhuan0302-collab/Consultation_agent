@@ -21,6 +21,10 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file:
       - .env.production
     volumes:
@@ -34,6 +38,10 @@ services:
   report_worker:
     build: ./backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command: ["python", "scripts/report_worker.py"]
     env_file:
       - .env.production

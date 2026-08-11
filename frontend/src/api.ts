@@ -10,15 +10,11 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem("admin_token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((options.headers || {}) as Record<string, string>)
   };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new ApiError(response.status, payload.detail || `请求失败：${response.status}`);
@@ -43,14 +39,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  saveDraft: (submissionId: number, answers: { question_id: number; score: number }[]) =>
+  saveDraft: (submissionId: number, answers: { question_id: number; score: number }[], sessionToken: string) =>
     request<{ message: string }>(`/api/public/submissions/${submissionId}/draft`, {
       method: "PUT",
+      headers: { "X-Session-Token": sessionToken },
       body: JSON.stringify({ answers })
     }),
-  submitQuestionnaire: (submissionId: number, answers: { question_id: number; score: number }[]) =>
+  submitQuestionnaire: (submissionId: number, answers: { question_id: number; score: number }[], sessionToken: string) =>
     request<{ score: ScoreResponse; report: Report }>(`/api/public/submissions/${submissionId}/submit`, {
       method: "POST",
+      headers: { "X-Session-Token": sessionToken },
       body: JSON.stringify({ answers })
     }),
   submissionReport: (submissionId: number, sessionToken: string) =>
@@ -64,10 +62,11 @@ export const api = {
       body: JSON.stringify({ email })
     }),
   login: (email: string, password: string) =>
-    request<{ access_token: string }>("/api/admin/auth/login", {
+    request<{ message: string }>("/api/admin/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password })
     }),
+  logout: () => request<{ message: string }>("/api/admin/auth/logout", { method: "POST" }),
   me: () => request<User>("/api/admin/me"),
   analytics: () => request<AnalyticsSummary>("/api/admin/analytics/summary"),
   leads: () => request<Lead[]>("/api/admin/leads"),
