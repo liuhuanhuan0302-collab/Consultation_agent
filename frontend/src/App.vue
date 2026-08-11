@@ -164,7 +164,7 @@ function getGlobalIndex(module: QuestionModule, qIndex: number): number {
   return count + qIndex + 1;
 }
 
-const adminToken = ref(localStorage.getItem("admin_token"));
+const adminToken = ref(false);
 const adminUser = ref<User | null>(null);
 const adminEmail = ref("admin@example.com");
 const adminPassword = ref("");
@@ -470,15 +470,15 @@ async function selectAnswer(questionId: number, value: number) {
     error.value = "";
     missingNoticeVisible.value = false;
   }
-  if (submissionId.value) {
-    await api.saveDraft(submissionId.value, answersToList()).catch(() => undefined);
+  if (submissionId.value && sessionToken.value) {
+    await api.saveDraft(submissionId.value, answersToList(), sessionToken.value).catch(() => undefined);
   }
   draftSaved.value = true;
   setTimeout(() => { draftSaved.value = false; }, 2000);
 }
 
 async function submitQuestionnaire() {
-  if (!submissionId.value) return;
+  if (!submissionId.value || !sessionToken.value) return;
   const missing = questions.value.find((question) => answers.value[question.id] === undefined);
   if (missing) {
     const targetIndex = modules.value.findIndex((module) => module.questions.some((question) => question.id === missing.id));
@@ -491,7 +491,7 @@ async function submitQuestionnaire() {
   busy.value = true;
   error.value = "";
   try {
-    const result = await api.submitQuestionnaire(submissionId.value, answersToList());
+    const result = await api.submitQuestionnaire(submissionId.value, answersToList(), sessionToken.value);
     score.value = result.score;
     report.value = result.report;
     localStorage.setItem("diagnosis_report_token", result.report.public_token);
@@ -528,8 +528,7 @@ async function loginAdmin() {
   error.value = "";
   try {
     const result = await api.login(adminEmail.value, adminPassword.value);
-    localStorage.setItem("admin_token", result.access_token);
-    adminToken.value = result.access_token;
+    adminToken.value = true;
     await loadAdminShell();
   } catch (err) {
     error.value = err instanceof Error ? err.message : "登录失败";
@@ -539,6 +538,7 @@ async function loginAdmin() {
 async function loadAdminShell() {
   try {
     adminUser.value = await api.me();
+    adminToken.value = true;
     await loadAdminTab("overview");
   } catch (err) {
     if (!handleAdminRequestError(err)) {
@@ -589,13 +589,13 @@ async function openLeadDetail(lead: Lead) {
   }
 }
 
-function logoutAdmin() {
+async function logoutAdmin() {
+  await api.logout().catch(() => undefined);
   clearAdminSession();
 }
 
 function clearAdminSession(message = "") {
-  localStorage.removeItem("admin_token");
-  adminToken.value = null;
+  adminToken.value = false;
   adminUser.value = null;
   analytics.value = null;
   leads.value = [];
@@ -608,6 +608,7 @@ function clearAdminSession(message = "") {
 
 function handleAdminRequestError(err: unknown): boolean {
   if (err instanceof ApiError && err.status === 401) {
+    void api.logout().catch(() => undefined);
     clearAdminSession("登录状态已失效，请重新登录。");
     return true;
   }
@@ -641,10 +642,10 @@ const currentProblemAnalysis = computed(() => {
 });
 const reportDemandSummary = computed(() => activeReport.value?.customer_classification?.demand_summary || "");
 const aiProblemAnalysis = computed(() => {
-  const content = activeReport.value?.advisor_messages?.find((message) => message.role === "assistant")?.content?.trim() || "";
+  const content = reportHtmlToPlainText(activeReport.value?.html_content || "");
   if (!content) return "";
   const matched = content.match(/(?:^|\n)#{0,3}\s*AI\s*当前问题分析\s*[:：]?\s*\n?([\s\S]*?)(?=\n#{1,3}\s|\n(?:管理摘要|关键短板|优先 AI 场景|下一步建议)\s*[:：]|$)/i);
-  return (matched?.[1] || content).trim().slice(0, 1800);
+  return (matched?.[1] || "").trim().slice(0, 1800);
 });
 const aiProblemAnalysisHtml = computed(() => escapeHtmlText(aiProblemAnalysis.value).replace(/\n/g, "<br>"));
 const leadDetailReportHtml = computed(() => normalizeReportHtml(selectedLeadDetail.value?.report?.html_content || ""));
@@ -659,7 +660,9 @@ const filteredLeads = computed(() => {
     .filter((lead) => leadStrategyFilter.value === "全部打法" || (lead.priority_strategy || "未判定") === leadStrategyFilter.value)
     .filter((lead) => leadIndustryFilter.value === "全部行业" || (lead.industry || "未填写") === leadIndustryFilter.value)
     .sort((a, b) => {
-      const diff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      const bTime = b.last_activity_at || b.updated_at || b.created_at;
+      const aTime = a.last_activity_at || a.updated_at || a.created_at;
+      const diff = parseApiDate(bTime).getTime() - parseApiDate(aTime).getTime();
       return leadSortOrder.value === "newest" ? diff : -diff;
     });
 });
@@ -683,6 +686,14 @@ function escapeHtmlText(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function reportHtmlToPlainText(value: string): string {
+  const container = document.createElement("div");
+  container.innerHTML = value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:h[1-6]|p|section|div|li|tr)>/gi, "\n");
+  return (container.textContent || "").replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function inlineMarkdown(value: string): string {
@@ -747,15 +758,43 @@ function renderAdvisorText(value: string): string {
 }
 
 function normalizeReportHtml(value: string): string {
-  return value.replace(/<div class="report-ai-text">([\s\S]*?)<\/div>/g, (match, content: string) => {
+  const normalized = value.replace(/<div class="report-ai-text">([\s\S]*?)<\/div>/g, (match, content: string) => {
     if (/<(?:h4|p|ul|ol|li)\b/i.test(content)) return match;
     return `<div class="report-ai-text">${renderAdvisorText(content)}</div>`;
   });
+  return sanitizeReportHtml(normalized);
+}
+
+function sanitizeReportHtml(value: string): string {
+  const allowedTags = new Set(["ARTICLE", "SECTION", "H2", "H3", "H4", "P", "STRONG", "EM", "UL", "OL", "LI", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DIV", "SPAN", "BR"]);
+  const container = document.createElement("div");
+  container.innerHTML = value;
+  for (const element of Array.from(container.querySelectorAll("*"))) {
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(document.createTextNode(element.textContent || ""));
+      continue;
+    }
+    for (const attribute of Array.from(element.attributes)) {
+      if (attribute.name !== "class") element.removeAttribute(attribute.name);
+    }
+  }
+  return container.innerHTML;
+}
+
+function parseApiDate(value: string): Date {
+  // SQLAlchemy stores UTC timestamps without an offset; mark them as UTC before browser conversion.
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  return new Date(hasTimezone ? value : `${value}Z`);
 }
 
 function formatDate(iso: string): string {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return parseApiDate(iso).toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateTime(iso: string): string {
+  if (!iso) return "-";
+  return parseApiDate(iso).toLocaleString("zh-CN", { hour12: false });
 }
 
 function updateShareMeta(title: string, description: string, url: string) {
@@ -867,7 +906,7 @@ watch(leadTotalPages, (totalPages) => {
 onMounted(async () => {
   window.addEventListener("beforeunload", handleBeforeUnload);
   try {
-    if (isAdmin && adminToken.value) {
+    if (isAdmin) {
       await loadAdminShell();
     } else if (reportToken) {
       await loadPublicReport();
@@ -1034,7 +1073,7 @@ onBeforeUnmount(clearReportPolling);
         </div>
         <div class="leads-table-wrap">
           <table class="leads-table">
-            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>打法</th><th>时间</th></tr></thead>
+            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>打法</th><th>最近处理时间</th></tr></thead>
             <tbody>
               <tr v-for="lead in pagedLeads" :key="lead.id" class="clickable-row" tabindex="0" @click="openLeadDetail(lead)" @keydown.enter="openLeadDetail(lead)">
                 <td :title="lead.company_name || ''">{{ lead.company_name }}</td>
@@ -1044,7 +1083,7 @@ onBeforeUnmount(clearReportPolling);
                 <td :title="lead.phone || lead.wechat || ''">{{ lead.phone || lead.wechat }}</td>
                 <td><span class="pill" :class="lead.lead_level">{{ lead.lead_level }}</span></td>
                 <td><span class="pill strategy">{{ lead.priority_strategy || "未判定" }}</span></td>
-                <td>{{ new Date(lead.created_at).toLocaleString() }}</td>
+                <td>{{ formatDateTime(lead.last_activity_at || lead.updated_at || lead.created_at) }}</td>
               </tr>
               <tr v-if="!pagedLeads.length">
                 <td colspan="8" class="empty-cell">暂无符合条件的线索</td>
@@ -1436,7 +1475,7 @@ onBeforeUnmount(clearReportPolling);
             <div><span>总分</span><strong>{{ selectedLeadDetail.submission?.total_score ?? "-" }}/{{ selectedLeadDetail.submission?.max_score ?? 260 }}</strong></div>
             <div><span>得分率</span><strong>{{ selectedLeadScoreRate }}</strong></div>
             <div><span>风险等级</span><strong>{{ selectedLeadDetail.submission?.risk_level || "-" }}</strong></div>
-            <div><span>提交时间</span><strong>{{ selectedLeadDetail.submission?.submitted_at ? new Date(selectedLeadDetail.submission.submitted_at).toLocaleString() : "-" }}</strong></div>
+            <div><span>提交时间</span><strong>{{ selectedLeadDetail.submission?.submitted_at ? formatDateTime(selectedLeadDetail.submission.submitted_at) : "-" }}</strong></div>
           </div>
           <div v-if="selectedLeadDetail.submission?.dimensions?.length" class="dimension-mini-list">
             <div v-for="item in selectedLeadDetail.submission.dimensions" :key="item.module_code">

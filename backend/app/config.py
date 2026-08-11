@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     )
     algorithm: str = "HS256"
     access_token_expire_minutes: int = Field(default=720, description="JWT 有效期（分钟），默认 12 小时")
+    admin_session_cookie_name: str = Field(default="admin_session", description="后台 HttpOnly 会话 Cookie 名称")
+    initial_admin_email: str | None = Field(
+        default=None,
+        description="生产环境首次初始化时创建的管理员邮箱；仅在 users 表为空时使用",
+    )
+    initial_admin_password: str | None = Field(
+        default=None,
+        min_length=12,
+        description="生产环境首次初始化时创建的管理员密码；仅在 users 表为空时使用",
+    )
 
     # ── AI 模型 ──
     deepseek_api_key: str | None = Field(default=None, description="DeepSeek API 密钥，可选，不填则报告不调用 AI")
@@ -39,6 +49,8 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     deepseek_timeout_seconds: int = Field(default=45, description="DeepSeek 请求超时秒数")
     report_generation_concurrency: int = Field(default=5, description="每个后端进程内允许同时生成报告的数量")
+    max_pending_report_jobs: int = Field(default=100, ge=1, description="待处理/处理中报告任务总数上限")
+    max_leads_per_email_per_hour: int = Field(default=3, ge=1, description="同一邮箱每小时允许新建的线索数")
 
     # ── PDF ──
     pdf_browser_render: bool = Field(default=False, description="是否用浏览器打开公开报告页并打印为 PDF")

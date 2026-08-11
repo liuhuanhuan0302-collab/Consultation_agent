@@ -13,15 +13,17 @@
 
 import json
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
+from slowapi import Limiter
+from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.models import AiConversationMessage, ChannelSource, CompanyLead, DiagnosisSubmission, Report, ReportStatus, SubmissionStatus
+from app.models import ChannelSource, CompanyLead, DiagnosisSubmission, Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus, SubmissionStatus
 from app.repositories.consult_repo import (
     get_lead_by_session,
     get_report_by_public_token,
@@ -51,6 +53,7 @@ from app.utils.request import client_ip
 
 router = APIRouter()
 settings = get_settings()
+limiter = Limiter(key_func=client_ip)
 
 
 def is_mysql_deadlock(exc: OperationalError) -> bool:
@@ -59,24 +62,45 @@ def is_mysql_deadlock(exc: OperationalError) -> bool:
     return bool(args and args[0] in {1205, 1213})
 
 
-def report_ai_messages(db: Session, report_id: int) -> list[dict]:
-    messages = (
-        db.query(AiConversationMessage)
-        .filter(AiConversationMessage.report_id == report_id)
-        .order_by(AiConversationMessage.created_at.asc())
-        .all()
+def get_submission_for_session(
+    submission_id: int,
+    session_token: str = Header(alias="X-Session-Token", min_length=20, max_length=64),
+    db: Session = Depends(get_db),
+) -> DiagnosisSubmission:
+    """确认匿名会话持有指定答卷，避免自增 ID 被枚举后越权修改。"""
+    submission = get_submission_by_id(db, submission_id)
+    if not submission or submission.lead.session_token != session_token:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return submission
+
+
+def session_rate_limit_key(request: Request) -> str:
+    """提交限流同时绑定来源 IP 与匿名会话，避免单个会话被高频滥用。"""
+    return f"{client_ip(request)}:{request.headers.get('X-Session-Token', 'anonymous')}"
+
+
+def enforce_email_lead_limit(db: Session, email: str, current_lead_id: int | None) -> None:
+    """限制同邮箱短时间内创建多个匿名线索，保留当前线索的正常更新。"""
+    cutoff = datetime.utcnow() - timedelta(hours=1)
+    query = db.query(func.count(CompanyLead.id)).filter(
+        func.lower(CompanyLead.email) == email.lower(),
+        CompanyLead.created_at >= cutoff,
     )
-    return [
-        {
-            "role": message.role,
-            "purpose": message.purpose,
-            "content": message.content,
-            "model_vendor": message.model_vendor,
-            "model_name": message.model_name,
-            "created_at": message.created_at,
-        }
-        for message in messages
-    ]
+    if current_lead_id is not None:
+        query = query.filter(CompanyLead.id != current_lead_id)
+    if (query.scalar() or 0) >= settings.max_leads_per_email_per_hour:
+        raise HTTPException(status_code=429, detail="该邮箱提交过于频繁，请稍后再试")
+
+
+def enforce_report_queue_capacity(db: Session) -> None:
+    pending_count = (
+        db.query(func.count(ReportDeliveryJob.id))
+        .filter(ReportDeliveryJob.status.in_([ReportDeliveryStatus.queued.value, ReportDeliveryStatus.processing.value]))
+        .scalar()
+        or 0
+    )
+    if pending_count >= settings.max_pending_report_jobs:
+        raise HTTPException(status_code=503, detail="当前报告生成任务较多，请稍后再试")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -90,6 +114,7 @@ def report_ai_messages(db: Session, report_id: int) -> list[dict]:
 # 请求：{ source_code?: string, metadata?: object }
 # 返回：{ session_token: string }
 @router.post("/api/public/sessions", response_model=SessionResponse)
+@limiter.limit("20/hour")
 def create_session(payload: SessionCreate, request: Request, db: Session = Depends(get_db)) -> SessionResponse:
     lead = CompanyLead(source_code=payload.source_code or "default")
     db.add(lead)
@@ -165,6 +190,7 @@ def list_public_questions(db: Session = Depends(get_db)):
 # 返回：{ lead: {...}, submission_id: int }
 #       submission_id 用于后续答题和提交
 @router.post("/api/public/leads", response_model=LeadCreatedResponse)
+@limiter.limit("10/hour")
 def upsert_lead(payload: LeadCreate, request: Request, db: Session = Depends(get_db)) -> LeadCreatedResponse:
     if not payload.privacy_accepted:
         raise HTTPException(status_code=422, detail="请先确认隐私与联系授权")
@@ -178,6 +204,8 @@ def upsert_lead(payload: LeadCreate, request: Request, db: Session = Depends(get
         lead = CompanyLead(session_token=payload.session_token or None)
         db.add(lead)
         db.flush()
+    if lead.email != payload.email:
+        enforce_email_lead_limit(db, str(payload.email), lead.id)
 
     for field in [
         "company_name",
@@ -222,12 +250,16 @@ def upsert_lead(payload: LeadCreate, request: Request, db: Session = Depends(get
 # 路径：/api/public/submissions/{submission_id}/draft
 # 功能：答题过程中随时保存已答题目，支持断点续答
 #       同一题的答案再次提交会覆盖
-# 鉴权：无
+# 鉴权：匿名会话凭证 X-Session-Token（必须与答卷归属一致）
 # 请求：{ answers: [{ question_id: int, score: 0-4 }] }
 # 返回：{ message: "draft saved" }
 @router.put("/api/public/submissions/{submission_id}/draft", response_model=MessageResponse)
-def save_draft(submission_id: int, payload: DraftSaveRequest, db: Session = Depends(get_db)) -> MessageResponse:
-    persist_answers(db, submission_id, payload.answers)
+def save_draft(
+    payload: DraftSaveRequest,
+    submission: DiagnosisSubmission = Depends(get_submission_for_session),
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    persist_answers(db, submission.id, payload.answers)
     db.commit()
     return MessageResponse(message="draft saved")
 
@@ -241,7 +273,7 @@ def save_draft(submission_id: int, payload: DraftSaveRequest, db: Session = Depe
 #         ① 保存答案 → ② 规则引擎评分 → ③ 创建报告邮件发送任务
 #       后台 worker 再异步调用 DeepSeek、生成 PDF 并发送邮件；
 #       如果 AI 调用失败，worker 自动回退到模板报告。
-# 鉴权：无
+# 鉴权：匿名会话凭证 X-Session-Token（必须与答卷归属一致）
 # 请求：{ answers: [{ question_id, score }...] } — 必须包含全部 68 题
 #       score 范围 0-4
 # 返回：{
@@ -252,19 +284,23 @@ def save_draft(submission_id: int, payload: DraftSaveRequest, db: Session = Depe
 # 错误：404 如果 submission_id 不存在
 #       422 如果缺少题目答案
 @router.post("/api/public/submissions/{submission_id}/submit", response_model=SubmitResponse)
+@limiter.limit("3/hour", key_func=session_rate_limit_key)
 async def submit_questionnaire(
-    submission_id: int,
     payload: SubmitQuestionnaireRequest,
     request: Request,
     background_tasks: BackgroundTasks,
+    submission: DiagnosisSubmission = Depends(get_submission_for_session),
     db: Session = Depends(get_db),
 ) -> SubmitResponse:
+    submission_id = submission.id
     last_deadlock: OperationalError | None = None
     for attempt in range(3):
         try:
-            submission = get_submission_by_id(db, submission_id)
-            if not submission:
-                raise HTTPException(status_code=404, detail="Submission not found")
+            if attempt:
+                submission = get_submission_for_session(submission_id, request.headers.get("X-Session-Token", ""), db)
+            if submission.status == SubmissionStatus.submitted.value:
+                raise HTTPException(status_code=409, detail="该问卷已提交，请等待报告生成完成")
+            enforce_report_queue_capacity(db)
             persist_answers(db, submission_id, payload.answers)
             submission.status = SubmissionStatus.submitted.value
             submission.submitted_at = datetime.utcnow()
@@ -318,7 +354,6 @@ async def submit_questionnaire(
             "model_vendor": report.model_vendor,
             "model_name": report.model_name,
             "created_at": report.created_at,
-            "advisor_messages": report_ai_messages(db, report.id),
         },
     )
 
@@ -350,7 +385,6 @@ def submission_report_status(submission_id: int, session_token: str, db: Session
         "dimensions": summary.get("dimensions", []),
         "low_dimensions": summary.get("low_dimensions", []),
         "customer_classification": summary.get("customer_classification", {}),
-        "advisor_messages": report_ai_messages(db, report.id),
     }
 
 
@@ -379,7 +413,6 @@ def latest_session_report(session_token: str, db: Session = Depends(get_db)) -> 
         "dimensions": summary.get("dimensions", []),
         "low_dimensions": summary.get("low_dimensions", []),
         "customer_classification": summary.get("customer_classification", {}),
-        "advisor_messages": report_ai_messages(db, report.id),
     }
 
 
@@ -422,7 +455,6 @@ def public_report(public_token: str, request: Request, db: Session = Depends(get
         "dimensions": summary.get("dimensions", []),
         "low_dimensions": summary.get("low_dimensions", []),
         "customer_classification": summary.get("customer_classification", {}),
-        "advisor_messages": report_ai_messages(db, report.id),
     }
 
 

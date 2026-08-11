@@ -82,6 +82,8 @@ MYSQL_ROOT_PASSWORD=一个强密码
 MYSQL_PASSWORD=另一个强密码
 DATABASE_URL=mysql+pymysql://consult_agent:同MYSQL_PASSWORD@mysql:3306/consultation_agent?charset=utf8mb4
 SECRET_KEY=一个随机长字符串
+INITIAL_ADMIN_EMAIL=首个管理员的公司邮箱
+INITIAL_ADMIN_PASSWORD=仅首次启动使用的强密码
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 PUBLIC_WEB_BASE_URL=http://你的服务器公网IP/diagnosis
 CORS_ORIGINS=http://你的服务器公网IP

@@ -1,5 +1,6 @@
 import { getSiteContent } from "./services/site-content.js";
 import { selectBusinessModule, selectMetrics, toInternalHref } from "./adapters/site-content-adapter.js";
+import { DIAGNOSIS_URL } from "./config.js";
 import { getModuleStateContent } from "./ui/module-state.js";
 import { formatEmpty, formatMetric, truncateText } from "./utils/formatters.js";
 import { getNextTabIndex, setUrlParameter } from "./utils/interactions.js";
@@ -8,6 +9,10 @@ const menuToggle = /** @type {HTMLButtonElement | null} */ (document.querySelect
 const mobilePanel = /** @type {HTMLElement | null} */ (document.querySelector(".mobile-panel"));
 const siteHeader = document.querySelector(".site-header");
 const pageRequestController = new AbortController();
+
+document.querySelectorAll("[data-assessment-link]").forEach((element) => {
+  if (element instanceof HTMLAnchorElement) element.href = DIAGNOSIS_URL;
+});
 
 function closeMobileMenu({ restoreFocus = false } = {}) {
   if (!menuToggle || !mobilePanel) return;

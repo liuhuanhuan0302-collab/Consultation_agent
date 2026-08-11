@@ -16,6 +16,8 @@ export type Lead = {
   priority_strategy: string | null;
   demand_summary: string | null;
   created_at: string;
+  updated_at: string;
+  last_activity_at: string | null;
 };
 
 export type Question = {
@@ -77,14 +79,6 @@ export type Report = {
     priority_strategy?: string;
     demand_summary?: string;
   };
-  advisor_messages?: {
-    role: string;
-    purpose: string;
-    content: string;
-    model_vendor: string | null;
-    model_name: string | null;
-    created_at: string;
-  }[];
 };
 
 export type CaseStudy = {

@@ -11,23 +11,30 @@
 
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.config import get_settings
 from app.models import Role, User
 from app.utils.security import decode_access_token
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/admin/auth/login")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
     """
     从 JWT token 解析当前登录用户。
     token 无效 / 过期 / 用户不存在 / 已禁用 → 401。
     """
-    payload = decode_access_token(token)
+    settings = get_settings()
+    token = credentials.credentials if credentials else request.cookies.get(settings.admin_session_cookie_name)
+    payload = decode_access_token(token) if token else None
     if not payload or not payload.get("sub"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token")
     # 按 user_id 查找，同时校验 is_active

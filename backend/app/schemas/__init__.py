@@ -10,6 +10,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models import Role
+from app.utils.time_utils import serialize_utc_datetime
+
+
+class UTCResponseModel(BaseModel):
+    """将数据库中无时区的 UTC DATETIME 明确序列化为带 Z 的时间字符串。"""
+
+    model_config = ConfigDict(from_attributes=True, json_encoders={datetime: serialize_utc_datetime})
 
 
 # ── 认证 ──────────────────────────────────────────────────────────
@@ -26,8 +33,7 @@ class LoginRequest(BaseModel):
 
 
 # ── 用户管理 ──────────────────────────────────────────────────────
-class UserRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class UserRead(UTCResponseModel):
 
     id: int
     email: EmailStr
@@ -43,6 +49,13 @@ class UserCreate(BaseModel):
     name: str = Field(description="姓名")
     role: Role = Field(description="角色：admin/operator/sales/consultant")
     password: str = Field(min_length=8, description="初始密码，不少于 8 位")
+
+
+class PasswordChangeRequest(BaseModel):
+    """当前登录用户修改自己的密码。"""
+
+    current_password: str = Field(min_length=1, description="当前密码")
+    new_password: str = Field(min_length=12, description="新密码，不少于 12 位")
 
 
 # ── 会话 & 线索 ───────────────────────────────────────────────────
@@ -85,8 +98,7 @@ class LeadCreate(BaseModel):
         return phone
 
 
-class LeadResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class LeadResponse(UTCResponseModel):
 
     id: int
     session_token: str
@@ -105,6 +117,8 @@ class LeadResponse(BaseModel):
     priority_strategy: str | None = Field(default=None, description="建议打法：闪电战/攻坚战/升维战")
     demand_summary: str | None = Field(default=None, description="客户当前诉求摘要")
     created_at: datetime
+    updated_at: datetime
+    last_activity_at: datetime | None = Field(default=None, description="最近处理时间，优先为问卷完成时间")
 
 
 class LeadCreatedResponse(BaseModel):
@@ -219,7 +233,6 @@ class ReportRead(BaseModel):
     model_vendor: str = Field(description="AI 模型供应商，默认 deepseek")
     model_name: str | None = Field(description="使用的 AI 模型名称")
     created_at: datetime
-    advisor_messages: list[AiMessageRead] = Field(default_factory=list, description="与本报告相关的大模型对话记录")
 
 
 class SubmitResponse(BaseModel):
