@@ -19,6 +19,9 @@ backend/htmlcov/
 frontend/.vite/
 .vite/
 backend/.vite/
+artifacts/
+.npm-cache/
+official-website/dist/
 .claude/
 .idea/
 backend/.idea/

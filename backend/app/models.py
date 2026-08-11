@@ -6,10 +6,11 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Te
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.utils.time_utils import utc_now
 
 
 def now() -> datetime:
-    return datetime.utcnow()
+    return utc_now()
 
 
 def token() -> str:

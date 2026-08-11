@@ -1,7 +1,8 @@
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import CompanyLead, DiagnosisSubmission, DimensionScore, QuestionAnswer, Report, ReportStatus, TrackingEvent
+from app.utils.time_utils import to_china_time
 
 
 def get_lead_by_session(db: Session, session_token: str) -> CompanyLead | None:
@@ -15,6 +16,13 @@ def list_leads(
     source_code: str | None = None,
     limit: int = 500,
 ) -> list[CompanyLead]:
+    latest_completed_at = (
+        select(func.max(DiagnosisSubmission.submitted_at))
+        .where(DiagnosisSubmission.lead_id == CompanyLead.id)
+        .correlate(CompanyLead)
+        .scalar_subquery()
+    )
+    last_activity_at = func.coalesce(latest_completed_at, CompanyLead.updated_at)
     query = db.query(CompanyLead)
     if industry:
         query = query.filter(CompanyLead.industry == industry)
@@ -22,7 +30,12 @@ def list_leads(
         query = query.filter(CompanyLead.lead_level == lead_level)
     if source_code:
         query = query.filter(CompanyLead.source_code == source_code)
-    return query.order_by(CompanyLead.created_at.desc()).limit(limit).all()
+    rows = query.add_columns(last_activity_at.label("last_activity_at")).order_by(last_activity_at.desc()).limit(limit).all()
+    leads: list[CompanyLead] = []
+    for lead, activity_at in rows:
+        lead.last_activity_at = activity_at
+        leads.append(lead)
+    return leads
 
 
 def latest_submission_for_lead(db: Session, lead_id: int) -> DiagnosisSubmission | None:
@@ -85,7 +98,7 @@ def get_questionnaire_hourly_counts(db: Session) -> list[dict]:
     )
     buckets = {hour: 0 for hour in range(24)}
     for (created_at,) in events:
-        buckets[created_at.hour] += 1
+        buckets[to_china_time(created_at).hour] += 1
     return [{"label": f"{hour:02d}:00", "count": buckets[hour]} for hour in range(24)]
 
 

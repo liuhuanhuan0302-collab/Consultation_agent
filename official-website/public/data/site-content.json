@@ -1,0 +1,80 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "updatedAt": "2026-07-21",
+    "sources": [
+      "260415-优鲲智能简介.pptx",
+      "网站文案第一版.md"
+    ]
+  },
+  "company": {
+    "name": "优鲲智能",
+    "positioning": "AI 时代企业智能化升级实战伙伴",
+    "profile": "优鲲智能聚焦 AI 技术驱动的数智化转型与管理咨询，为企业提供“AI 战略突围 - 组织能力升级 - 智能运营提效”的全链路解决方案，打造人机共生的新型竞争力。多年来，优鲲智能始终在商界前沿深度洞察，拥有来自阿里巴巴、网易、字节跳动及 AI 独角兽的顾问，或在 AI 组织升级中有丰富实战经验的操盘手。",
+    "mission": "让 AI 放大每家企业的核心能力",
+    "vision": "实现智能技术普惠千万企业增效降本，共创人机协同的新商业文明",
+    "values": ["客户成功", "智能向善", "极致提效", "创业精神"]
+  },
+  "hero": {
+    "eyebrow": "AI 时代企业智能化升级实战伙伴",
+    "title": "用 500+ AI 落地场景，找到企业最值得先做的增长机会",
+    "description": "优鲲智能提供 AI 战略突围、组织能力升级、智能运营提效的全链路解决方案，帮助企业用 AI 重塑业务，进化为面向未来的智简组织。",
+    "actions": [
+      { "label": "了解 AI 数智化诊断", "href": "#diagnosis" },
+      { "label": "查看 500+ 场景能力", "href": "#solutions" }
+    ]
+  },
+  "facts": {
+    "scenarioCount": 500,
+    "agentAvailability": "7×24"
+  },
+  "serviceChain": ["AI 战略突围", "组织能力升级", "智能运营提效"],
+  "metrics": [
+    { "key": "scenarios", "value": 500, "suffix": "+", "label": "企业 AI 应用落地场景" },
+    { "key": "availability", "displayValue": "7×24", "label": "企业数字员工持续响应" },
+    { "key": "serviceChain", "value": 3, "suffix": " 阶段", "label": "战略、组织、运营全链路" },
+    { "key": "transformation", "value": 5, "suffix": " 阶段", "label": "流程化到生态化升级路径" }
+  ],
+  "painPoints": [
+    { "id": "scene", "title": "场景找不准", "lead": "500+ 场景，不从 0 试错", "description": "从企业 AI 应用落地场景出发，识别投入小、见效快、价值高的优先入口。" },
+    { "id": "team", "title": "团队用不起来", "lead": "从一号位到一线，认知先拉齐", "description": "通过训战结合，让团队在真实业务中学习 AI、使用 AI、形成 AI 能力。" },
+    { "id": "response", "title": "客户响应跟不上", "lead": "7×24 小时数字员工在线", "description": "定制企业 AI Agent，持续响应客户，并辅助完成业务任务。" },
+    { "id": "path", "title": "转型没有路径", "lead": "5 个阶段，把 AI 变成组织能力", "description": "从流程化、自动化、数字化、智能化到生态化，循序推进组织升级。" }
+  ],
+  "diagnosis": {
+    "title": "先诊断，再落地",
+    "description": "围绕企业业务流程、客户响应、团队能力、数据基础和落地优先级，梳理当前阶段与可行动的 AI 机会。",
+    "dimensions": ["业务流程", "客户响应", "团队能力", "数据基础", "落地优先级"],
+    "outputs": ["AI 成熟度等级", "高价值场景建议", "业务提效机会清单", "推荐落地路径", "专属咨询建议"]
+  },
+  "solutions": [
+    { "id": "consulting", "label": "数智化咨询", "title": "识别企业 AI 落地场景", "description": "展示阿里协助 To B 端企业 AI 应用落地的 500+ 场景，帮助企业理解不同产业在 AI 加持下如何完成系统升级。" },
+    { "id": "agent", "label": "AI 应用解决方案", "title": "构建人机协作的智能体", "description": "定制属于企业的数字员工 AI Agent，7×24 小时响应客户并自主完成任务，让业务跑得更快、更准、更智能。" },
+    { "id": "training", "label": "AI 培训", "title": "提升组织与人员 AI 能力", "description": "通过定制化 AI 大赛、AI 培训和训战结合，帮助企业从一号位到一线员工刷新认知，找到适合自身的 AI 落地场景。" }
+  ],
+  "transformationStages": [
+    { "id": "process", "name": "流程化", "description": "梳理关键业务流程，识别重复、低效和依赖经验的环节。" },
+    { "id": "automation", "name": "自动化", "description": "减少人工重复操作，让基础流程先顺畅运转。" },
+    { "id": "digital", "name": "数字化", "description": "沉淀业务数据，让流程、知识和运营状态可被看见。" },
+    { "id": "intelligent", "name": "智能化", "description": "引入 AI Agent 与智能分析，让 AI 参与业务执行。" },
+    { "id": "ecosystem", "name": "生态化", "description": "推动企业、客户与合作伙伴形成高效的人机协同网络。" }
+  ],
+  "businessModules": [
+    { "id": "scenario-consulting", "name": "AI 场景咨询", "core": "基于 500+ 企业 AI 应用落地场景，识别高价值业务入口。", "value": "减少从零试错，明确企业数智化升级的优先顺序。", "method": "场景展示、业务梳理、优先级诊断。" },
+    { "id": "agent-solution", "name": "AI Agent", "core": "围绕五大场景构建人机协作智能体，派遣企业数字员工。", "value": "实现 7×24 小时客户响应与任务辅助执行。", "method": "需求梳理、智能体定制、业务协同。" },
+    { "id": "ai-training", "name": "AI 培训", "core": "通过定制化 AI 大赛、AI 培训和训战结合提升人员能力。", "value": "从一号位到一线员工刷新认知，让企业长出 AI 能力。", "method": "认知培训、实战训练、场景共创。" },
+    { "id": "transformation-consulting", "name": "转型升级咨询", "core": "围绕一号位意识、数智化工具和最佳实践推进组织升级。", "value": "将客户做大、将团队做小、将组织做灵。", "method": "流程化、自动化、数字化、智能化、生态化。" }
+  ],
+  "methodology": {
+    "principles": [
+      { "name": "一心", "description": "将客户做大" },
+      { "name": "三简", "description": "简化业务 / 简化组织 / 简化团队" },
+      { "name": "五化", "description": "流程化 / 自动化 / 数字化 / 智能化 / 生态化" }
+    ]
+  },
+  "contact": {
+    "phone": null,
+    "email": null,
+    "bookingUrl": null
+  }
+}

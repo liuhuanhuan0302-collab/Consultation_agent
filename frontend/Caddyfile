@@ -1,0 +1,27 @@
+:80 {
+    encode zstd gzip
+    header {
+        Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    @api path /api/*
+    handle @api {
+        reverse_proxy backend:8000
+    }
+
+    redir /diagnosis /diagnosis/ permanent
+
+    handle_path /diagnosis/* {
+        root * /srv/diagnosis
+        try_files {path} /index.html
+        file_server
+    }
+
+    handle {
+        root * /srv/official
+        try_files {path} /index.html
+        file_server
+    }
+}

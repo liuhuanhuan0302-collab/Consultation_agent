@@ -82,8 +82,10 @@ MYSQL_ROOT_PASSWORD=一个强密码
 MYSQL_PASSWORD=另一个强密码
 DATABASE_URL=mysql+pymysql://consult_agent:同MYSQL_PASSWORD@mysql:3306/consultation_agent?charset=utf8mb4
 SECRET_KEY=一个随机长字符串
+INITIAL_ADMIN_EMAIL=首个管理员的公司邮箱
+INITIAL_ADMIN_PASSWORD=仅首次启动使用的强密码
 DEEPSEEK_API_KEY=你的DeepSeek密钥
-PUBLIC_WEB_BASE_URL=http://你的服务器公网IP
+PUBLIC_WEB_BASE_URL=http://你的服务器公网IP/diagnosis
 CORS_ORIGINS=http://你的服务器公网IP
 ```
 
@@ -111,6 +113,15 @@ cd /opt/consultation_agent
 docker compose up -d --build
 ```
 
+当前服务器由系统 Nginx 对外监听 80 端口，Docker 前端只监听本机 `127.0.0.1:8080`。首次部署或更新后，还需要启用项目内的 Nginx 转发配置：
+
+```bash
+sudo cp deploy/nginx/consultation-agent.conf /etc/nginx/sites-available/consultation-agent
+sudo ln -sfn /etc/nginx/sites-available/consultation-agent /etc/nginx/sites-enabled/consultation-agent
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
 第一次启动后初始化数据库：
 
 ```bash
@@ -131,18 +142,30 @@ docker compose logs -f report_worker
 docker compose logs -f frontend
 ```
 
+确认 Docker 前端在本机可访问：
+
+```bash
+curl -I http://127.0.0.1:8080/
+```
+
 ## 6. 访问测试
 
-浏览器打开：
+官网：
 
 ```text
 http://你的服务器公网IP
 ```
 
+诊断系统：
+
+```text
+http://你的服务器公网IP/diagnosis/
+```
+
 后台：
 
 ```text
-http://你的服务器公网IP/admin
+http://你的服务器公网IP/diagnosis/admin
 ```
 
 接口健康检查：
@@ -159,16 +182,27 @@ curl http://你的服务器公网IP/api/health
 
 ## 7. 二维码地址
 
-没有域名时，二维码会使用：
+域名尚未完成 ICP 备案时，请先使用服务器公网 IP：
 
 ```env
-PUBLIC_WEB_BASE_URL=http://你的服务器公网IP
+PUBLIC_WEB_BASE_URL=http://8.138.165.2/diagnosis
 ```
+
+阿里云安全组需要放行 TCP 80。此阶段二维码和访问地址都使用 IP，微信内访问会显示 IP 地址提醒，这是平台行为，无法由项目代码消除。
+
+完成 ICP 备案、域名解析生效后，再改为：
+
+```env
+PUBLIC_WEB_BASE_URL=https://youyuexinxi.com.cn/diagnosis
+CORS_ORIGINS=https://youyuexinxi.com.cn
+```
+
+同时开放 TCP 443，并在系统 Nginx 中配置 HTTPS 证书；Docker 内的 Caddy 只负责站点和接口路由。
 
 之后如果换域名，需要改成：
 
 ```env
-PUBLIC_WEB_BASE_URL=https://你的域名
+PUBLIC_WEB_BASE_URL=https://你的域名/diagnosis
 CORS_ORIGINS=https://你的域名
 ```
 
@@ -182,10 +216,13 @@ docker compose up -d
 
 ## 8. 重要提醒
 
-安全组只开放：
+当前使用 IP 临时访问时，安全组只开放：
 
 - 22
 - 80
+
+完成备案并切回 HTTPS 域名后，再开放：
+
 - 443
 
 不要开放：

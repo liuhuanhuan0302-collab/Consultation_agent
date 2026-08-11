@@ -1,0 +1,17 @@
+{
+  "name": "youkun-intelligence-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc -p jsconfig.json --noEmit",
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "8.1.5"
+  }
+}

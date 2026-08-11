@@ -21,6 +21,10 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file:
       - .env.production
     volumes:
@@ -34,6 +38,10 @@ services:
   report_worker:
     build: ./backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command: ["python", "scripts/report_worker.py"]
     env_file:
       - .env.production
@@ -48,10 +56,20 @@ services:
       - app_net
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_APP_BASE_PATH: /diagnosis/
+        VITE_DIAGNOSIS_URL: /diagnosis/?source=OFFICIAL_WEBSITE
     restart: unless-stopped
+    env_file:
+      - .env.production
     ports:
-      - "80:80"
+      - "127.0.0.1:8080:80"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - backend
     networks:
@@ -60,6 +78,8 @@ services:
 volumes:
   mysql_data:
   backend_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   app_net:
