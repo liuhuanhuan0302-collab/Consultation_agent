@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from html import unescape
 from io import BytesIO
 
@@ -15,7 +14,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from app.models import CompanyLead, DiagnosisSubmission, Report
-from app.utils.time_utils import to_china_time
+from app.utils.time_utils import to_china_time, utc_now
 
 
 FONT_NAME = "Microsoft YaHei"
@@ -134,7 +133,7 @@ def generate_lead_export_docx(
 
     subtitle = document.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle_run = subtitle.add_run(f"导出时间：{_format_datetime(datetime.utcnow())}（北京时间）")
+    subtitle_run = subtitle.add_run(f"导出时间：{_format_datetime(utc_now())}（北京时间）")
     subtitle_run.font.size = Pt(9)
     subtitle_run.font.color.rgb = RGBColor(102, 112, 133)
     _set_run_font(subtitle_run)

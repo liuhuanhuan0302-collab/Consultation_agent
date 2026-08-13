@@ -2,7 +2,9 @@
 
 import csv
 import json
+import re
 from io import StringIO
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -20,6 +22,12 @@ from app.utils.auth import LeadExporter, LeadViewer
 from app.utils.logging_utils import write_operation_log
 
 router = APIRouter()
+
+
+def lead_word_filename(company_name: str | None) -> str:
+    """生成浏览器下载用的客户详情 Word 文件名。"""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", (company_name or "").strip()).strip(". ")
+    return f"{name or '客户'}客户详情.docx"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -146,7 +154,12 @@ def export_lead_word(lead_id: int, db: Session = Depends(get_db), user: User = D
     return StreamingResponse(
         iter([document]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="lead-{lead.id}.docx"'},
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="customer-detail.docx"; '
+                f"filename*=UTF-8''{quote(lead_word_filename(lead.company_name))}"
+            )
+        },
     )
 
 

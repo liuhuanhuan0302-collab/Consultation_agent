@@ -13,6 +13,11 @@ def active_modules_with_questions(db: Session) -> list[QuestionModule]:
             with_loader_criteria(Question, Question.is_active.is_(True), include_aliases=True),
         )
         .filter(QuestionModule.is_active.is_(True))
+        .filter(
+            db.query(Question.id)
+            .filter(Question.module_id == QuestionModule.id, Question.is_active.is_(True))
+            .exists()
+        )
         .order_by(QuestionModule.sort_order.asc())
         .all()
     )

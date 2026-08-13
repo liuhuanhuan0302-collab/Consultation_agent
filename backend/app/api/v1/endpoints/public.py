@@ -33,6 +33,7 @@ from app.repositories.consult_repo import (
 from app.repositories.qr_code_repo import get_active_channel_by_code
 from app.repositories.questionnaire_repo import active_modules_with_questions
 from app.schemas import (
+    AnswerInput,
     DraftSaveRequest,
     LeadCreate,
     LeadCreatedResponse,
@@ -102,6 +103,23 @@ def enforce_report_queue_capacity(db: Session) -> None:
     )
     if pending_count >= settings.max_pending_report_jobs:
         raise HTTPException(status_code=503, detail="当前报告生成任务较多，请稍后再试")
+
+
+def validate_complete_answers(db: Session, answers: list[AnswerInput]) -> None:
+    """提交前校验答案集合必须完整覆盖当前所有启用题目。"""
+    active_modules = active_modules_with_questions(db)
+    expected_question_ids = {
+        question.id
+        for module in active_modules
+        for question in module.questions
+        if question.is_active
+    }
+    submitted_question_ids = [answer.question_id for answer in answers]
+    submitted_question_id_set = set(submitted_question_ids)
+    if not expected_question_ids:
+        raise HTTPException(status_code=422, detail="当前题库暂无可提交题目，请联系管理员")
+    if len(submitted_question_ids) != len(submitted_question_id_set) or submitted_question_id_set != expected_question_ids:
+        raise HTTPException(status_code=422, detail="当前页面题目尚未全部完成，请完成所有题目后再提交")
 
 
 def serialize_public_report(report: Report) -> dict:
@@ -310,6 +328,7 @@ async def submit_questionnaire(
     db: Session = Depends(get_db),
 ) -> SubmitResponse:
     submission_id = submission.id
+    validate_complete_answers(db, payload.answers)
     last_deadlock: OperationalError | None = None
     for attempt in range(3):
         try:

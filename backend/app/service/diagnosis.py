@@ -9,8 +9,6 @@
   5. 根据评分结果 + 联系方式计算线索等级
 """
 
-from datetime import datetime
-
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
@@ -27,8 +25,10 @@ from app.repositories.consult_repo import (
     get_existing_answers,
     get_submission_by_id,
 )
+from app.repositories.questionnaire_repo import active_modules_with_questions
 from app.schemas import DimensionScoreRead, ScoreResponse
 from app.service.scoring import ModuleScoreSpec, QuestionScoreSpec, compute_scores
+from app.utils.time_utils import utc_now
 
 
 def serialize_score(submission_id: int, score_result) -> ScoreResponse:
@@ -111,14 +111,13 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
         raise HTTPException(status_code=404, detail="Submission not found")
 
     answer_map = get_answer_map(db, submission_id)
-    # 使用本次提交实际携带的题目评分，避免后台调整题库后影响已开始填写的客户。
-    questions = (
-        db.query(Question)
-        .options(joinedload(Question.module))
-        .filter(Question.id.in_(answer_map))
-        .all()
-    )
-    modules = sorted({question.module for question in questions}, key=lambda module: module.sort_order)
+    modules = active_modules_with_questions(db)
+    questions = [
+        question
+        for module in modules
+        for question in sorted(module.questions, key=lambda item: item.sort_order)
+        if question.is_active
+    ]
     try:
         score_result = compute_scores(
             [ModuleScoreSpec(module.id, module.code, module.name, module.max_score) for module in modules],
@@ -146,7 +145,7 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
     db_submission.score_rate = score_result.score_rate
     db_submission.risk_level = score_result.risk_level
     db_submission.status = SubmissionStatus.scored.value
-    db_submission.submitted_at = db_submission.submitted_at or datetime.utcnow()
+    db_submission.submitted_at = db_submission.submitted_at or utc_now()
     # 更新线索等级
     db_submission.lead.lead_level = calculate_lead_level(db_submission.lead, score_result)
     db_submission.lead.demand_summary = summarize_customer_demand(db_submission.lead, score_result)
