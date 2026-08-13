@@ -128,7 +128,6 @@ export type AnalyticsSummary = {
   funnel: AnalyticsFunnelStep[];
   hourly_questionnaire_counts: AnalyticsBucket[];
   lead_level_distribution: AnalyticsBucket[];
-  strategy_distribution: AnalyticsBucket[];
   industry_distribution: AnalyticsBucket[];
 };
 
@@ -170,5 +169,11 @@ export type LeadDetail = {
       model_name: string | null;
       created_at: string;
     }[];
+  } | null;
+  delivery: {
+    status: "queued" | "processing" | "sent" | "failed";
+    recipient_email: string;
+    last_error: string | null;
+    sent_at: string | null;
   } | null;
 };

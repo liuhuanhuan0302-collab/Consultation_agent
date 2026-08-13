@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, QuestionModule, Report, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, Question, QuestionModule, Report, ScoreResponse, User } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -20,6 +20,27 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new ApiError(response.status, payload.detail || `请求失败：${response.status}`);
   }
   return response.json();
+}
+
+async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, payload.detail || `导出失败：${response.status}`);
+  }
+  const disposition = response.headers.get("content-disposition") || "";
+  const utf8Name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  const plainName = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+  const filename = decodeURIComponent(utf8Name || plainName || fallbackName);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 export const api = {
@@ -53,8 +74,6 @@ export const api = {
     }),
   submissionReport: (submissionId: number, sessionToken: string) =>
     request<Report>(`/api/public/submissions/${submissionId}/report?session_token=${encodeURIComponent(sessionToken)}`),
-  latestSessionReport: (sessionToken: string) =>
-    request<Report>(`/api/public/sessions/report?session_token=${encodeURIComponent(sessionToken)}`),
   publicReport: (token: string) => request<Report>(`/api/public/reports/${token}`),
   emailReport: (token: string, email: string) =>
     request<{ message: string }>(`/api/public/reports/${token}/email`, {
@@ -71,7 +90,28 @@ export const api = {
   analytics: () => request<AnalyticsSummary>("/api/admin/analytics/summary"),
   leads: () => request<Lead[]>("/api/admin/leads"),
   leadDetail: (leadId: number) => request<LeadDetail>(`/api/admin/leads/${leadId}`),
+  updateLeadDiagnosticEmail: (leadId: number, email: string) =>
+    request<{ message: string }>(`/api/admin/leads/${leadId}/diagnostic-email`, {
+      method: "PUT",
+      body: JSON.stringify({ email })
+    }),
+  leadWordExport: (leadId: number) => downloadFile(`/api/admin/leads/${leadId}/export/word`, `lead-${leadId}.docx`),
+  leadsExport: () => downloadFile("/api/admin/leads/export", "leads.csv"),
   adminQuestions: () => request<QuestionModule[]>("/api/admin/questions"),
+  createQuestionModule: (payload: Record<string, unknown>) =>
+    request<QuestionModule>("/api/admin/modules", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  deleteQuestionModule: (moduleId: number) =>
+    request<{ message: string }>(`/api/admin/modules/${moduleId}`, { method: "DELETE" }),
+  createQuestion: (payload: Record<string, unknown>) =>
+    request<Question>("/api/admin/questions", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  deleteQuestion: (questionId: number) =>
+    request<{ message: string }>(`/api/admin/questions/${questionId}`, { method: "DELETE" }),
   cases: () => request<CaseStudy[]>("/api/admin/cases"),
   createCase: (payload: Record<string, unknown>) =>
     request<CaseStudy>("/api/admin/cases", {

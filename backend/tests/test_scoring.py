@@ -28,6 +28,23 @@ def test_full_score_is_260_and_excellent():
     assert len(result.dimensions) == 10
 
 
+def test_total_max_score_follows_the_included_question_banks():
+    modules = [
+        ModuleScoreSpec(1, "M01", "题库一", 28),
+        ModuleScoreSpec(2, "M02", "题库二", 24),
+    ]
+    questions = [
+        QuestionScoreSpec(1, 1, 4),
+        QuestionScoreSpec(2, 2, 4),
+    ]
+
+    result = compute_scores(modules, questions, {1: 4, 2: 4})
+
+    assert result.total_score == 52
+    assert result.max_score == 52
+    assert result.score_rate == 1
+
+
 @pytest.mark.parametrize(
     ("score", "level"),
     [(0, "高风险"), (65, "高风险"), (66, "较弱"), (130, "较弱"), (131, "良好"), (195, "良好"), (196, "优秀")],

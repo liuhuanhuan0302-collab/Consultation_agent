@@ -20,6 +20,10 @@ frontend/.vite/
 .vite/
 backend/.vite/
 artifacts/
+.playwright-cli/
+output/
+lead-detail-page.png
+question-bank-dialog.png
 .npm-cache/
 official-website/dist/
 .claude/

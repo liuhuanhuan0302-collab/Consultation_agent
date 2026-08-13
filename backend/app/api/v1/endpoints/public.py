@@ -31,6 +31,7 @@ from app.repositories.consult_repo import (
     latest_submission_for_lead,
 )
 from app.repositories.qr_code_repo import get_active_channel_by_code
+from app.repositories.questionnaire_repo import active_modules_with_questions
 from app.schemas import (
     DraftSaveRequest,
     LeadCreate,
@@ -44,7 +45,7 @@ from app.schemas import (
     SubmitResponse,
     TrackEventRequest,
 )
-from app.service.diagnosis import active_modules_with_questions, persist_answers, score_submission
+from app.service.diagnosis import persist_answers, score_submission
 from app.service.report_queue import enqueue_report_delivery, process_next_report_delivery
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
@@ -101,6 +102,23 @@ def enforce_report_queue_capacity(db: Session) -> None:
     )
     if pending_count >= settings.max_pending_report_jobs:
         raise HTTPException(status_code=503, detail="当前报告生成任务较多，请稍后再试")
+
+
+def serialize_public_report(report: Report) -> dict:
+    """组装公开报告响应 — 三个报告接口共用，字段变更只改这一处。"""
+    summary = json.loads(report.summary_json or "{}")
+    return {
+        "id": report.id,
+        "public_token": report.public_token,
+        "status": report.status,
+        "title": report.title,
+        "html_content": report.html_content,
+        "created_at": report.created_at,
+        "score": summary.get("score"),
+        "dimensions": summary.get("dimensions", []),
+        "low_dimensions": summary.get("low_dimensions", []),
+        "customer_classification": summary.get("customer_classification", {}),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -196,7 +214,6 @@ def upsert_lead(payload: LeadCreate, request: Request, db: Session = Depends(get
         raise HTTPException(status_code=422, detail="请先确认隐私与联系授权")
     if not payload.phone and not payload.wechat:
         raise HTTPException(status_code=422, detail="手机号或微信至少填写一项")
-
     lead = None
     if payload.session_token:
         lead = get_lead_by_session(db, payload.session_token)
@@ -278,7 +295,7 @@ def save_draft(
 #       score 范围 0-4
 # 返回：{
 #         score: { total_score, max_score, score_rate, risk_level,
-#                  dimensions[10], low_dimensions[3] },
+#                  dimensions[], low_dimensions[] },
 #         report: { id, public_token, status, title, html_content, ... }
 #       }
 # 错误：404 如果 submission_id 不存在
@@ -317,7 +334,8 @@ async def submit_questionnaire(
                 db.flush()
             else:
                 report.status = ReportStatus.pending.value
-            enqueue_report_delivery(db, report, str(submission.lead.email))
+            if submission.lead.email:
+                enqueue_report_delivery(db, report, str(submission.lead.email))
             write_tracking_event(
                 db,
                 "submit_questionnaire",
@@ -373,19 +391,7 @@ def submission_report_status(submission_id: int, session_token: str, db: Session
     report = submission.report
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    summary = json.loads(report.summary_json or "{}")
-    return {
-        "id": report.id,
-        "public_token": report.public_token,
-        "status": report.status,
-        "title": report.title,
-        "html_content": report.html_content,
-        "created_at": report.created_at,
-        "score": summary.get("score"),
-        "dimensions": summary.get("dimensions", []),
-        "low_dimensions": summary.get("low_dimensions", []),
-        "customer_classification": summary.get("customer_classification", {}),
-    }
+    return serialize_public_report(report)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -401,19 +407,7 @@ def latest_session_report(session_token: str, db: Session = Depends(get_db)) -> 
     report = submission.report if submission else None
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    summary = json.loads(report.summary_json or "{}")
-    return {
-        "id": report.id,
-        "public_token": report.public_token,
-        "status": report.status,
-        "title": report.title,
-        "html_content": report.html_content,
-        "created_at": report.created_at,
-        "score": summary.get("score"),
-        "dimensions": summary.get("dimensions", []),
-        "low_dimensions": summary.get("low_dimensions", []),
-        "customer_classification": summary.get("customer_classification", {}),
-    }
+    return serialize_public_report(report)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -425,10 +419,7 @@ def latest_session_report(session_token: str, db: Session = Depends(get_db)) -> 
 #       返回 HTML 报告内容 + 评分数据 + 维度详情
 # 鉴权：无
 # 请求：路径参数 public_token
-# 返回：{ id, public_token, status, title, html_content, created_at,
-#          score: { total, max_score, score_rate, risk_level },
-#          dimensions: [{ module_code, module_name, raw_score, max_score, score_rate, risk_level }],
-#          low_dimensions: [...] }
+# 返回：serialize_public_report 组装的结构（含 score / dimensions / low_dimensions / customer_classification）
 @router.get("/api/public/reports/{public_token}")
 def public_report(public_token: str, request: Request, db: Session = Depends(get_db)) -> dict:
     report = get_report_by_public_token(db, public_token)
@@ -443,19 +434,7 @@ def public_report(public_token: str, request: Request, db: Session = Depends(get
         ip_address=client_ip(request),
     )
     db.commit()
-    summary = json.loads(report.summary_json or "{}")
-    return {
-        "id": report.id,
-        "public_token": report.public_token,
-        "status": report.status,
-        "title": report.title,
-        "html_content": report.html_content,
-        "created_at": report.created_at,
-        "score": summary.get("score"),
-        "dimensions": summary.get("dimensions", []),
-        "low_dimensions": summary.get("low_dimensions", []),
-        "customer_classification": summary.get("customer_classification", {}),
-    }
+    return serialize_public_report(report)
 
 
 # ══════════════════════════════════════════════════════════════════

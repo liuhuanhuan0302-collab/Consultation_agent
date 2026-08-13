@@ -50,14 +50,15 @@ def html_to_text(html: str) -> str:
     return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
 
-def risk_color(level: str) -> colors.Color:
-    palette = {
-        "高风险": colors.HexColor("#ef4444"),
-        "较弱": colors.HexColor("#f59e0b"),
-        "良好": colors.HexColor("#3b82f6"),
-        "优秀": colors.HexColor("#22c55e"),
-    }
-    return palette.get(level, colors.HexColor("#94a3b8"))
+def rate_color(rate: float) -> colors.Color:
+    """按得分率分档着色，替代已从 summary_json 下线的风险等级字段。"""
+    if rate < 0.25:
+        return colors.HexColor("#ef4444")
+    if rate < 0.5:
+        return colors.HexColor("#f59e0b")
+    if rate < 0.75:
+        return colors.HexColor("#3b82f6")
+    return colors.HexColor("#22c55e")
 
 
 def report_dimensions(report: Report) -> list[dict]:
@@ -84,10 +85,9 @@ def make_bar_chart(dimensions: list[dict], font_name: str) -> Drawing:
         y = chart_top - index * (bar_height + gap)
         rate = float(dimension.get("score_rate", 0))
         name = str(dimension.get("module_name") or dimension.get("module_code") or "")[:12]
-        level = str(dimension.get("risk_level") or "")
         drawing.add(String(0, y + 2, name, fontName=font_name, fontSize=8, fillColor=colors.HexColor("#475467")))
         drawing.add(Rect(chart_left, y, max_width, bar_height, fillColor=colors.HexColor("#f1f5f9"), strokeColor=None))
-        drawing.add(Rect(chart_left, y, max_width * min(rate, 1), bar_height, fillColor=risk_color(level), strokeColor=None))
+        drawing.add(Rect(chart_left, y, max_width * min(rate, 1), bar_height, fillColor=rate_color(rate), strokeColor=None))
         drawing.add(String(chart_left + max_width + 8, y + 2, f"{round(rate * 100)}%", fontName=font_name, fontSize=8, fillColor=colors.HexColor("#475467")))
     return drawing
 
@@ -117,7 +117,7 @@ def make_radar_chart(dimensions: list[dict], font_name: str) -> Drawing:
         rate = float(dimension.get("score_rate", 0))
         px, py = cx + math.cos(angle) * radius * min(rate, 1), cy + math.sin(angle) * radius * min(rate, 1)
         value_points.extend([px, py])
-        drawing.add(Circle(px, py, 3, fillColor=risk_color(str(dimension.get("risk_level") or "")), strokeColor=colors.white))
+        drawing.add(Circle(px, py, 3, fillColor=rate_color(rate), strokeColor=colors.white))
     drawing.add(Polygon(value_points, strokeColor=colors.HexColor("#3b82f6"), fillColor=colors.Color(0.23, 0.51, 0.96, alpha=0.18)))
     return drawing
 
@@ -240,21 +240,19 @@ def render_report_html_attachment(report: Report) -> bytes:
     if score:
         cards = f"""
         <section class="score-strip">
-          <div class="score-card"><span>诊断总分</span><strong>{escape(str(score.get("total", "-")))}<em>/{escape(str(score.get("max_score", 260)))}</em></strong></div>
-          <div class="score-card"><span>就绪度等级</span><strong>{escape(str(score.get("risk_level", "-")))}</strong></div>
+          <div class="score-card"><span>诊断总分</span><strong>{escape(str(score.get("total", "-")))}<em>/{escape(str(score.get("max_score", "-")))}</em></strong></div>
           <div class="score-card"><span>综合得分率</span><strong>{round(float(score.get("score_rate") or 0) * 100)}<em>%</em></strong></div>
         </section>
         """
     dimension_rows = "".join(
         f"<tr><td>{escape(str(item.get('module_name') or item.get('module_code') or ''))}</td>"
-        f"<td>{round(float(item.get('score_rate') or 0) * 100)}%</td>"
-        f"<td>{escape(str(item.get('risk_level') or ''))}</td></tr>"
+        f"<td>{round(float(item.get('score_rate') or 0) * 100)}%</td></tr>"
         for item in dimensions
     )
     dimension_table = f"""
     <section class="html-section">
       <h2>维度概览</h2>
-      <table><thead><tr><th>维度</th><th>得分率</th><th>等级</th></tr></thead><tbody>{dimension_rows}</tbody></table>
+      <table><thead><tr><th>维度</th><th>得分率</th></tr></thead><tbody>{dimension_rows}</tbody></table>
     </section>
     """ if dimension_rows else ""
     html = f"""<!doctype html>
