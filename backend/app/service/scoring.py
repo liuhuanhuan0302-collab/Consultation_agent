@@ -3,8 +3,8 @@
 
 评分流程：
   1. 每模块得分 = (模块实际得分 / 模块题目总分) × 模块满分
-  2. 总分 = 10 个模块得分之和，满分 260
-  3. 总分等级：≤65 高风险 / ≤130 较弱 / ≤195 良好 / >195 优秀
+  2. 总分 = 参与答题的各模块得分之和，满分随实际题库动态计算
+  3. 总分等级按得分率换算：≤25% 高风险 / ≤50% 较弱 / ≤75% 良好 / >75% 优秀
   4. 维度等级：<0.25 高风险 / <0.50 较弱 / <0.75 良好 / ≥0.75 优秀
 
 注意：题目原始分值可能 ≠ 4（某些模块做了压缩），
@@ -14,9 +14,8 @@
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
-# 总分满分 — 与 10 个模块的 max_score 之和一致
+# 默认总分满分，用于兼容既有规则；实际评分时由参与答题的模块动态计算。
 TOTAL_MAX_SCORE = 260
-
 
 @dataclass(frozen=True)
 class QuestionScoreSpec:
@@ -51,19 +50,20 @@ class DimensionScoreResult:
 class ScoreResult:
     """完整评分结果"""
     total_score: int
-    max_score: int      # 固定 260
+    max_score: int      # 参与答题模块的满分之和
     score_rate: float   # 综合得分率
     risk_level: str
     dimensions: list[DimensionScoreResult]
 
 
-def classify_total_score(score: int) -> str:
-    """总分 -> 风险等级（四档阈值）。"""
-    if score <= 65:
+def classify_total_score(score: int, max_score: int = TOTAL_MAX_SCORE) -> str:
+    """总分 -> 风险等级（按当前问卷满分等比例换算，兼容历史 260 分阈值）。"""
+    rate = score / max_score if max_score else 0
+    if rate <= 0.25:
         return "高风险"
-    if score <= 130:
+    if rate <= 0.5:
         return "较弱"
-    if score <= 195:
+    if rate <= 0.75:
         return "良好"
     return "优秀"
 
@@ -142,11 +142,12 @@ def compute_scores(
         )
 
     total = sum(dimension.raw_score for dimension in dimensions)
-    rate = round(total / TOTAL_MAX_SCORE, 4)
+    total_max_score = sum(module.max_score for module in modules)
+    rate = round(total / total_max_score, 4) if total_max_score else 0
     return ScoreResult(
         total_score=total,
-        max_score=TOTAL_MAX_SCORE,
+        max_score=total_max_score,
         score_rate=rate,
-        risk_level=classify_total_score(total),
+        risk_level=classify_total_score(total, total_max_score),
         dimensions=dimensions,
     )

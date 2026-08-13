@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -19,24 +20,31 @@ STALE_PROCESSING_TIMEOUT = timedelta(minutes=15)
 
 def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -> ReportDeliveryJob:
     """创建或复用报告发送任务，提交接口只负责入队，不等待 AI 和邮件。"""
+    normalized_email = (recipient_email or "").strip().lower()
+    if not normalized_email:
+        raise ValueError("报告接收邮箱为空，无法加入发送队列")
+
     existing = (
         db.query(ReportDeliveryJob)
         .filter(
             ReportDeliveryJob.report_id == report.id,
-            ReportDeliveryJob.status.in_([ReportDeliveryStatus.queued.value, ReportDeliveryStatus.processing.value]),
+            ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
         )
         .first()
     )
     if existing:
-        existing.recipient_email = recipient_email
+        existing.recipient_email = normalized_email
         existing.run_after = datetime.utcnow()
         return existing
+
+    # processing 中的任务已不在候选之列：worker 读取收件人发生在领取之后，
+    # 直接改它的 recipient_email 可能不生效，因此为更正后的邮箱新建一条任务补发。
 
     job = ReportDeliveryJob(
         lead_id=report.submission.lead_id,
         submission_id=report.submission_id,
         report_id=report.id,
-        recipient_email=recipient_email,
+        recipient_email=normalized_email,
         status=ReportDeliveryStatus.queued.value,
         run_after=datetime.utcnow(),
     )
@@ -46,7 +54,12 @@ def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -
 
 
 def claim_next_job(db: Session) -> ReportDeliveryJob | None:
-    """领取一条待处理任务，并先回收意外中断的处理任务。"""
+    """领取一条待处理任务，并先回收意外中断的处理任务。
+
+    领取通过条件 UPDATE（WHERE status=queued）原子完成：多个 worker
+    并发调用时只有一个能拿到 rowcount=1，避免同一任务被重复生成报告、
+    重复发送邮件。
+    """
     now = datetime.utcnow()
     stale_before = now - STALE_PROCESSING_TIMEOUT
 
@@ -73,24 +86,37 @@ def claim_next_job(db: Session) -> ReportDeliveryJob | None:
         logger.warning("回收了 %s 条超时的报告发送任务", len(stale_jobs))
         db.commit()
 
-    job = (
-        db.query(ReportDeliveryJob)
+    candidate_id = (
+        db.query(ReportDeliveryJob.id)
         .filter(
             ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
             ReportDeliveryJob.run_after <= now,
             ReportDeliveryJob.attempts < ReportDeliveryJob.max_attempts,
         )
         .order_by(ReportDeliveryJob.created_at.asc())
-        .first()
+        .scalar()
     )
-    if not job:
+    if not candidate_id or not _try_claim_job(db, candidate_id, now):
         return None
-    job.status = ReportDeliveryStatus.processing.value
-    job.locked_at = now
-    job.attempts += 1
+    return db.get(ReportDeliveryJob, candidate_id)
+
+
+def _try_claim_job(db: Session, job_id: int, now: datetime) -> bool:
+    """条件 UPDATE 原子认领：只有状态仍为 queued 时才生效，防止并发重复领取。"""
+    result = db.execute(
+        update(ReportDeliveryJob)
+        .where(
+            ReportDeliveryJob.id == job_id,
+            ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
+        )
+        .values(
+            status=ReportDeliveryStatus.processing.value,
+            locked_at=now,
+            attempts=ReportDeliveryJob.attempts + 1,
+        )
+    )
     db.commit()
-    db.refresh(job)
-    return job
+    return result.rowcount == 1
 
 
 async def process_report_delivery_job(job_id: int) -> bool:

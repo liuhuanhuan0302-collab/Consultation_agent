@@ -56,34 +56,25 @@ function shortName(name: string): string {
   return name.slice(0, colon);
 }
 
-function riskColor(level: string): string {
-  switch (level) {
-    case "高风险":
-      return "#ef4444";
-    case "较弱":
-      return "#f59e0b";
-    case "良好":
-      return "#3b82f6";
-    case "优秀":
-      return "#22c55e";
-    default:
-      return "#94a3b8";
-  }
+function rateColor(rate: number): string {
+  if (rate < 0.25) return "#ef4444";
+  if (rate < 0.5) return "#f59e0b";
+  if (rate < 0.75) return "#3b82f6";
+  return "#22c55e";
 }
 
-function riskBg(level: string): string {
-  switch (level) {
-    case "高风险":
-      return "rgba(239,68,68,0.20)";
-    case "较弱":
-      return "rgba(245,158,11,0.20)";
-    case "良好":
-      return "rgba(59,130,246,0.18)";
-    case "优秀":
-      return "rgba(34,197,94,0.18)";
-    default:
-      return "rgba(148,163,184,0.10)";
-  }
+function rateBg(rate: number): string {
+  if (rate < 0.25) return "rgba(239,68,68,0.20)";
+  if (rate < 0.5) return "rgba(245,158,11,0.20)";
+  if (rate < 0.75) return "rgba(59,130,246,0.18)";
+  return "rgba(34,197,94,0.18)";
+}
+
+function rateLabel(rate: number): string {
+  if (rate < 0.25) return "高风险";
+  if (rate < 0.5) return "较弱";
+  if (rate < 0.75) return "良好";
+  return "优秀";
 }
 
 function tooltipValue(raw: unknown): number {
@@ -96,8 +87,8 @@ const barData = computed(() => ({
     {
       label: "得分率",
       data: sorted.value.map((d) => Math.round(d.score_rate * 100)),
-      backgroundColor: sorted.value.map((d) => riskBg(d.risk_level)),
-      borderColor: sorted.value.map((d) => riskColor(d.risk_level)),
+      backgroundColor: sorted.value.map((d) => rateBg(d.score_rate)),
+      borderColor: sorted.value.map((d) => rateColor(d.score_rate)),
       borderWidth: 1.5,
       borderRadius: 4,
       barPercentage: 0.7,
@@ -127,7 +118,7 @@ const barOptions = {
         label: (ctx: TooltipItem<"bar">) => {
           const idx = ctx.dataIndex;
           const dim = sorted.value[idx];
-          return `${tooltipValue(ctx.raw)}% · ${dim?.risk_level ?? ""}`;
+          return `${tooltipValue(ctx.raw)}% · ${dim ? rateLabel(dim.score_rate) : ""}`;
         },
       },
     },
@@ -162,7 +153,7 @@ const radarData = computed(() => ({
       backgroundColor: "rgba(59,130,246,0.15)",
       borderColor: "#3b82f6",
       borderWidth: 2.5,
-      pointBackgroundColor: sorted.value.map((d) => riskColor(d.risk_level)),
+      pointBackgroundColor: sorted.value.map((d) => rateColor(d.score_rate)),
       pointBorderColor: "#ffffff",
       pointBorderWidth: 2,
       pointRadius: 5,
@@ -190,7 +181,7 @@ const radarOptions = {
           const label = String(ctx.label ?? "");
           const dim = sorted.value.find((d) => shortName(d.module_name) === label);
           const name = dim?.module_name ?? label;
-          return `${name}: ${tooltipValue(ctx.raw)}% · ${dim?.risk_level ?? ""}`;
+          return `${name}: ${tooltipValue(ctx.raw)}% · ${dim ? rateLabel(dim.score_rate) : ""}`;
         },
       },
     },

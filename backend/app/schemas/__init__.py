@@ -20,12 +20,6 @@ class UTCResponseModel(BaseModel):
 
 
 # ── 认证 ──────────────────────────────────────────────────────────
-class TokenResponse(BaseModel):
-    """登录成功返回的 JWT token"""
-    access_token: str = Field(description="JWT 令牌，后续请求放在 Authorization: Bearer 头中")
-    token_type: str = Field(default="bearer", description="令牌类型，固定为 bearer")
-
-
 class LoginRequest(BaseModel):
     """后台登录请求"""
     email: EmailStr = Field(description="登录邮箱")
@@ -127,6 +121,12 @@ class LeadCreatedResponse(BaseModel):
     submission_id: int = Field(description="答题提交 ID，后续答题和提交都要用")
 
 
+class LeadDiagnosticEmailUpdate(BaseModel):
+    """后台更正客户的报告接收邮箱。"""
+
+    email: EmailStr = Field(description="更正后的诊断报告接收邮箱")
+
+
 # ── 题库 ──────────────────────────────────────────────────────────
 class QuestionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -202,14 +202,14 @@ class DimensionScoreRead(BaseModel):
 
 
 class ScoreResponse(BaseModel):
-    """评分结果 — 含总分 + 10 维度详情 + 最薄弱 3 维度"""
+    """评分结果 — 含总分 + 维度详情 + 最薄弱 3 维度"""
     submission_id: int
-    total_score: int = Field(description="总分，满分 260")
-    max_score: int = Field(description="总分上限，固定 260")
+    total_score: int = Field(description="总分")
+    max_score: int = Field(description="总分上限，随实际题库动态计算")
     score_rate: float = Field(description="综合得分率，0-1")
     risk_level: str = Field(description="综合风险等级")
     low_dimensions: list[DimensionScoreRead] = Field(description="得分率最低的 3 个维度，优先改善方向")
-    dimensions: list[DimensionScoreRead] = Field(description="全部 10 个维度评分明细")
+    dimensions: list[DimensionScoreRead] = Field(description="全部维度评分明细")
 
 
 # ── 报告 ──────────────────────────────────────────────────────────
@@ -301,7 +301,6 @@ class AnalyticsSummary(BaseModel):
     funnel: list[AnalyticsFunnelStep] = Field(default_factory=list, description="转化漏斗")
     hourly_questionnaire_counts: list[AnalyticsBucket] = Field(default_factory=list, description="按小时统计的问卷完成人数")
     lead_level_distribution: list[AnalyticsBucket] = Field(default_factory=list, description="线索等级分布")
-    strategy_distribution: list[AnalyticsBucket] = Field(default_factory=list, description="打法分布")
     industry_distribution: list[AnalyticsBucket] = Field(default_factory=list, description="行业分布")
 
 

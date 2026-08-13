@@ -12,11 +12,12 @@
 from datetime import datetime
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     CompanyLead,
     DimensionScore,
+    Question,
     QuestionAnswer,
     SubmissionStatus,
 )
@@ -26,7 +27,6 @@ from app.repositories.consult_repo import (
     get_existing_answers,
     get_submission_by_id,
 )
-from app.repositories.questionnaire_repo import active_modules_with_questions
 from app.schemas import DimensionScoreRead, ScoreResponse
 from app.service.scoring import ModuleScoreSpec, QuestionScoreSpec, compute_scores
 
@@ -97,24 +97,6 @@ def summarize_customer_demand(lead: CompanyLead, score_result) -> str:
     return f"客户暂未填写明确 AI 诉求，当前建议优先关注：{low_names}。"
 
 
-def classify_priority_strategy(lead: CompanyLead, score_result) -> str:
-    """
-    客户打法分类：
-      闪电战：有明确诉求且基础不差，适合先做小而快的 AI 场景试点。
-      攻坚战：低分维度较多或综合得分较低，需要先补业务、流程和数据基础。
-      升维战：整体基础较好，适合做跨部门规模化和经营升级。
-    """
-    low_dimension_count = len([item for item in score_result.dimensions if item.score_rate < 0.5])
-    has_clear_demand = bool(lead.ai_focus and lead.ai_focus.strip())
-    if score_result.score_rate >= 0.75:
-        return "升维战"
-    if score_result.score_rate < 0.5 or low_dimension_count >= 4:
-        return "攻坚战"
-    if has_clear_demand:
-        return "闪电战"
-    return "攻坚战"
-
-
 def score_submission(db: Session, submission_id: int) -> ScoreResponse:
     """
     评分编排函数 — 问卷提交后的核心处理。
@@ -128,9 +110,15 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
     if not db_submission:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    modules = active_modules_with_questions(db)
-    questions = [question for module in modules for question in sorted(module.questions, key=lambda item: item.sort_order) if question.is_active]
     answer_map = get_answer_map(db, submission_id)
+    # 使用本次提交实际携带的题目评分，避免后台调整题库后影响已开始填写的客户。
+    questions = (
+        db.query(Question)
+        .options(joinedload(Question.module))
+        .filter(Question.id.in_(answer_map))
+        .all()
+    )
+    modules = sorted({question.module for question in questions}, key=lambda module: module.sort_order)
     try:
         score_result = compute_scores(
             [ModuleScoreSpec(module.id, module.code, module.name, module.max_score) for module in modules],
@@ -161,7 +149,6 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
     db_submission.submitted_at = db_submission.submitted_at or datetime.utcnow()
     # 更新线索等级
     db_submission.lead.lead_level = calculate_lead_level(db_submission.lead, score_result)
-    db_submission.lead.priority_strategy = classify_priority_strategy(db_submission.lead, score_result)
     db_submission.lead.demand_summary = summarize_customer_demand(db_submission.lead, score_result)
     db.flush()
     return serialize_score(submission_id, score_result)

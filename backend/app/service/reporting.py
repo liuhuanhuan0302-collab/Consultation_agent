@@ -139,11 +139,9 @@ def build_report_payload(lead: CompanyLead, report: Report, dimensions: list[Dim
             "total": submission.total_score,
             "max_score": submission.max_score,
             "score_rate": submission.score_rate,
-            "risk_level": submission.risk_level,
         },
         "customer_classification": {
             "lead_level": lead.lead_level,
-            "priority_strategy": lead.priority_strategy,
             "demand_summary": lead.demand_summary,
         },
         "dimensions": [
@@ -153,7 +151,6 @@ def build_report_payload(lead: CompanyLead, report: Report, dimensions: list[Dim
                 "raw_score": score.raw_score,
                 "max_score": score.max_score,
                 "score_rate": score.score_rate,
-                "risk_level": score.risk_level,
             }
             for score in sorted(dimensions, key=lambda item: item.module.sort_order)
         ],
@@ -196,7 +193,6 @@ def render_fallback_html(payload: dict, model_text: str | None = None) -> str:
     industry = html.escape(company.get("industry") or "未填写行业")
     ai_focus = html.escape(company.get("ai_focus") or "暂未补充")
     lead_level = html.escape(classification.get("lead_level") or "未判定")
-    priority_strategy = html.escape(classification.get("priority_strategy") or "未判定")
     demand_summary = html.escape(classification.get("demand_summary") or ai_focus)
 
     dimension_rows = "".join(
@@ -205,7 +201,6 @@ def render_fallback_html(payload: dict, model_text: str | None = None) -> str:
           <td>{html.escape(item["module_name"])}</td>
           <td>{item["raw_score"]}/{item["max_score"]}</td>
           <td>{round(item["score_rate"] * 100)}%</td>
-          <td>{html.escape(item["risk_level"])}</td>
         </tr>
         """
         for item in dimensions
@@ -241,14 +236,14 @@ def render_fallback_html(payload: dict, model_text: str | None = None) -> str:
     <article class="report-document">
       <section>
         <h2>管理摘要</h2>
-        <p>{company_name} 当前总分为 {score["total"]}/{score["max_score"]}，处于"{html.escape(score["risk_level"])}"阶段。本报告基于企业填写的 68 题量表生成，适合用于识别短板、筛选优先 AI 场景，并作为后续顾问访谈的前置材料。</p>
-        <p><strong>客户等级：</strong>{lead_level}　<strong>建议打法：</strong>{priority_strategy}</p>
+        <p>{company_name} 当前总分为 {score["total"]}/{score["max_score"]}。本报告基于企业填写的诊断量表生成，适合用于识别短板、筛选优先 AI 场景，并作为后续顾问访谈的前置材料。</p>
+        <p><strong>客户等级：</strong>{lead_level}</p>
         <p><strong>当前诉求：</strong>{demand_summary}</p>
       </section>
       <section>
         <h2>10 维得分</h2>
         <table>
-          <thead><tr><th>维度</th><th>得分</th><th>得分率</th><th>等级</th></tr></thead>
+          <thead><tr><th>维度</th><th>得分</th><th>得分率</th></tr></thead>
           <tbody>{dimension_rows}</tbody>
         </table>
       </section>
@@ -275,12 +270,12 @@ def build_deepseek_prompt(payload: dict) -> str:
 你是一名企业 AI 原生转型咨询顾问。请基于以下结构化诊断数据输出中文报告补充建议。
 要求：
 1. 不要编造客户未填写的事实。
-2. 不要改写评分数字和等级。
+2. 不要改写评分数字和得分率。
 3. 第一节必须使用标题“AI 当前问题分析”，篇幅约 700-1000 个中文字符。结合企业填写的诉求、行业和各维度得分，围绕 2-3 个核心问题分别说明：问题表现、答题或维度得分依据、对业务效率/客户体验/经营决策的影响、以及建议优先处理的动作。不得只罗列低分项，也不要使用空泛套话。
 4. 后续输出包括管理摘要、三条关键短板解释、三到五个优先 AI 场景、下一步咨询建议。
 5. 语气专业、务实，面向 CEO 和高管可读。
 6. 不要输出邮件格式、致/发件人/主题、代码块、分隔线，也不要重复报告标题和总分卡片。
-7. 必须解释 customer_classification 中的客户等级、当前诉求和建议打法；如果是“闪电战”，突出快速试点；如果是“攻坚战”，突出基础补齐；如果是“升维战”，突出规模化升级。
+7. 结合 customer_classification 中的客户等级和当前诉求提出建议；不要使用“风险等级”或“建议打法”等分类标签。
 8. 使用清晰小标题和自然段即可。
 
 诊断数据：
