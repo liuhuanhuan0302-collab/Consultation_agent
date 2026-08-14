@@ -225,6 +225,7 @@ def admin_get_lead_detail(lead_id: int, db: Session = Depends(get_db), user: Use
             "status": report.status,
             "html_content": report.html_content,
             "summary": json.loads(report.summary_json or "{}"),
+            "company_research": json.loads(report.company_research_json) if report.company_research_json else None,
             "created_at": report.created_at,
             "advisor_messages": [
                 {

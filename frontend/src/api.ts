@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, Question, QuestionModule, Report, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, Report, ScoreResponse, User } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -97,6 +97,27 @@ export const api = {
     }),
   leadWordExport: (leadId: number) => downloadFile(`/api/admin/leads/${leadId}/export/word`, `lead-${leadId}.docx`),
   leadsExport: () => downloadFile("/api/admin/leads/export", "leads.csv"),
+  gatewayConfig: () => request<GatewayConfig>("/api/admin/api-gateway"),
+  saveSearchConfig: (payload: Record<string, unknown>) =>
+    request<GatewayConfig>("/api/admin/api-gateway/search", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  saveLlmConfig: (payload: Record<string, unknown>) =>
+    request<GatewayConfig>("/api/admin/api-gateway/llm", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  testSearchConfig: (query: string, overrides: Record<string, unknown>) =>
+    request<{ ok: boolean; query?: string; result_count?: number; elapsed_ms?: number; first_results?: string[]; error?: string }>("/api/admin/api-gateway/test-search", {
+      method: "POST",
+      body: JSON.stringify({ query, ...overrides })
+    }),
+  testLlmConfig: (overrides: Record<string, unknown>) =>
+    request<{ ok: boolean; model?: string; elapsed_ms?: number; reply?: string; error?: string }>("/api/admin/api-gateway/test-llm", {
+      method: "POST",
+      body: JSON.stringify(overrides)
+    }),
   adminQuestions: () => request<QuestionModule[]>("/api/admin/questions"),
   createQuestionModule: (payload: Record<string, unknown>) =>
     request<QuestionModule>("/api/admin/modules", {

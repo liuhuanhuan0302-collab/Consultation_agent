@@ -1,4 +1,4 @@
-"""Compatibility imports; new code should use :mod:`app.core.config`."""
+"""Core application configuration and security primitives."""
 
 from app.core.config import Settings, get_settings
 

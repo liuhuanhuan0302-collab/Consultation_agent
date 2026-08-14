@@ -24,9 +24,21 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import AiConversationMessage, CaseStudy, CompanyLead, DimensionScore, Report, ReportStatus
 from app.repositories.case_repo import get_active_cases_by_modules, get_active_generic_cases
+from app.service.company_research import render_company_research_html
 
 logger = logging.getLogger(__name__)
 _report_generation_semaphore: asyncio.Semaphore | None = None
+
+
+def _load_company_research(report: Report) -> dict | None:
+    """读取报告的公司情报结果，损坏时静默跳过。"""
+    if not report.company_research_json:
+        return None
+    try:
+        research = json.loads(report.company_research_json)
+    except json.JSONDecodeError:
+        return None
+    return research if isinstance(research, dict) else None
 
 
 def report_generation_semaphore() -> asyncio.Semaphore:
@@ -119,14 +131,32 @@ def select_recommendations(db: Session, lead: CompanyLead, dimensions: list[Dime
     return selected[:limit]
 
 
-def build_report_payload(lead: CompanyLead, report: Report, dimensions: list[DimensionScore], cases: list[CaseStudy]) -> dict:
+def condense_research(research: dict | None) -> str | None:
+    """把 7 维情报压缩为简短事实摘要，供报告提示词引用。"""
+    if not research:
+        return None
+    labels = {
+        "company_overview": "公司介绍",
+        "revenue_scale": "营收规模",
+        "products": "产品",
+        "industry_characteristics": "行业特点",
+        "development_status": "发展现状",
+        "challenges": "可能遇到的挑战",
+        "ai_opportunities": "AI 机会",
+    }
+    parts = [f"{label}：{str(research.get(key) or '未披露').strip()[:120]}" for key, label in labels.items()]
+    return "；".join(parts)
+
+
+def build_report_payload(lead: CompanyLead, report: Report, dimensions: list[DimensionScore], cases: list[CaseStudy], research: dict | None = None) -> dict:
     """
     组装发送给 LLM 的结构化诊断数据。
-    包含企业信息、总分、10 维度明细、低分维度、推荐案例。
+    包含企业信息、总分、维度明细、低分维度、推荐案例，以及联网检索到的公司公开信息。
     此数据同时存入 Report.summary_json 供前端图表使用。
     """
     submission = report.submission
     low_dimensions = sorted(dimensions, key=lambda item: item.score_rate)[:3]
+    public_info = condense_research(research)
     return {
         "company": {
             "name": lead.company_name,
@@ -134,6 +164,7 @@ def build_report_payload(lead: CompanyLead, report: Report, dimensions: list[Dim
             "size": lead.company_size,
             "position": lead.position,
             "ai_focus": lead.ai_focus,
+            "public_info": public_info,
         },
         "score": {
             "total": submission.total_score,
@@ -350,7 +381,8 @@ async def generate_report_content(db: Session, report: Report) -> Report:
     lead = report.submission.lead
     dimensions = list(report.submission.dimension_scores)
     cases = select_recommendations(db, lead, dimensions)
-    payload = build_report_payload(lead, report, dimensions, cases)
+    research = _load_company_research(report)
+    payload = build_report_payload(lead, report, dimensions, cases, research=research)
     model_text = None
     status = ReportStatus.fallback.value
     error = None
@@ -370,7 +402,10 @@ async def generate_report_content(db: Session, report: Report) -> Report:
     report.summary_json = json.dumps(payload, ensure_ascii=False)
     report.model_name = get_settings().deepseek_model
     report.generation_error = error
-    report.html_content = render_fallback_html(payload, model_text=model_text)
+    html = render_fallback_html(payload, model_text=model_text)
+    if research:
+        html += render_company_research_html(research)
+    report.html_content = html
     report.recommendations.clear()
     db.flush()
 

@@ -131,6 +131,36 @@ export type AnalyticsSummary = {
   industry_distribution: AnalyticsBucket[];
 };
 
+export type CompanyResearch = {
+  company_name?: string;
+  company_overview?: string;
+  revenue_scale?: string;
+  products?: string;
+  industry_characteristics?: string;
+  development_status?: string;
+  challenges?: string;
+  ai_opportunities?: string;
+  analysis?: string;
+  sources?: { title: string; url: string }[];
+  researched_at?: string;
+};
+
+export type GatewayConfig = {
+  search_enabled: boolean;
+  search_provider: "bocha" | "serpapi" | "custom";
+  search_api_key: string;
+  search_base_url: string | null;
+  search_timeout_seconds: number;
+  search_max_results: number;
+  search_model: string | null;
+  llm_api_key: string;
+  llm_base_url: string | null;
+  llm_model: string | null;
+  key_reentry_required: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
 export type User = {
   id: number;
   email: string;
@@ -160,6 +190,7 @@ export type LeadDetail = {
     status: string;
     html_content: string;
     summary: Record<string, unknown>;
+    company_research: CompanyResearch | null;
     created_at: string;
     advisor_messages: {
       role: string;

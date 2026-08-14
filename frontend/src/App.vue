@@ -18,7 +18,7 @@ import {
 } from "lucide-vue-next";
 import ReportCharts from "./components/ReportCharts.vue";
 import { adminNotice, error } from "./composables/feedback";
-import { useAdmin } from "./composables/useAdmin";
+import { useAdmin, companyResearchSections, searchProviderOfficialUrls } from "./composables/useAdmin";
 import { useQuestionnaire } from "./composables/useQuestionnaire";
 import { useReportView } from "./composables/useReportView";
 import { isAdmin, reportToken } from "./utils/appPaths";
@@ -113,8 +113,18 @@ const {
   leadWordExporting,
   questionModuleForm,
   questionForm,
+  gatewayConfig,
+  searchForm,
+  llmForm,
+  searchSaving,
+  searchTesting,
+  llmSaving,
+  llmTesting,
+  searchTestResult,
+  llmTestResult,
   canExportLeads,
   canManageQuestionBank,
+  canManageGateway,
   leadIndustryOptions,
   sourceLabel,
   filteredLeads,
@@ -144,6 +154,10 @@ const {
   createQuestion,
   deleteQuestionModule,
   deleteQuestion,
+  saveSearchConfig,
+  saveLlmConfig,
+  testSearchConfig,
+  testLlmConfig,
 } = useAdmin();
 
 onMounted(async () => {
@@ -399,6 +413,31 @@ onBeforeUnmount(clearReportPolling);
           </section>
 
           <section class="detail-block">
+            <h3>企业情报与 AI 分析</h3>
+            <div v-if="selectedLeadDetail.report?.company_research" class="company-research-view">
+              <div class="company-research-sections">
+                <div v-for="[key, label] in companyResearchSections" :key="key" class="company-research-item">
+                  <span>{{ label }}</span>
+                  <p>{{ selectedLeadDetail.report.company_research[key] || "公开渠道未披露" }}</p>
+                </div>
+              </div>
+              <div class="detail-demand">
+                <span>AI 综合分析</span>
+                <p>{{ selectedLeadDetail.report.company_research.analysis || "暂无" }}</p>
+              </div>
+              <div v-if="selectedLeadDetail.report.company_research.sources?.length" class="company-research-sources">
+                <span>信息来源</span>
+                <ul>
+                  <li v-for="(source, index) in selectedLeadDetail.report.company_research.sources" :key="index">
+                    <a :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title || source.url }}</a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <p v-else class="empty-detail">尚未生成企业情报（需在 API 配置中启用联网搜索）。</p>
+          </section>
+
+          <section class="detail-block">
             <h3>AI 分析报告</h3>
             <div v-if="selectedLeadDetail.report?.html_content" class="detail-report-html" v-html="leadDetailReportHtml"></div>
             <p v-else class="empty-detail">报告还未生成或暂无内容。</p>
@@ -427,6 +466,64 @@ onBeforeUnmount(clearReportPolling);
             <p>{{ question.code }} · {{ question.text }}</p>
             <button v-if="canManageQuestionBank" class="icon-button danger-icon-button" type="button" :title="`删除题目：${question.code}`" @click="deleteQuestion(question)"><Trash2 :size="16" /></button>
           </div>
+        </section>
+      </div>
+
+      <div v-if="adminTab === 'gateway'" class="gateway-panel">
+        <header class="question-bank-header">
+          <div>
+            <p class="eyebrow">系统配置</p>
+            <h2>API 网关配置</h2>
+          </div>
+        </header>
+        <div v-if="gatewayConfig?.key_reentry_required" class="gateway-key-warning">检测到加密密钥已轮换，已保存的 API Key 无法解密，请重新填写搜索 / LLM Key 并保存。</div>
+
+        <section class="module-block gateway-card">
+          <header class="module-block-header">
+            <h2>搜索配置<span>公司情报检索</span></h2>
+          </header>
+          <p class="gateway-hint">启用后，客户提交问卷时系统会自动检索目标公司的公开信息，生成 7 维情报与 AI 分析。选择 DeepSeek 联网搜索时由 DeepSeek 一步完成检索与情报生成（需填入 DeepSeek API Key）。API Key 以掩码显示，输入框留空表示保留原值；切换服务商或使用自定义服务商时必须填写新的 Key，不能沿用旧 Key。</p>
+          <label class="gateway-check"><input v-model="searchForm.search_enabled" type="checkbox" /> 启用联网搜索</label>
+          <div class="question-bank-number-grid">
+            <label>搜索服务商
+              <select v-model="searchForm.search_provider">
+                <option value="bocha">博查 Bocha</option>
+                <option value="serpapi">SerpAPI</option>
+                <option value="deepseek">DeepSeek 联网搜索</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label v-if="searchForm.search_provider === 'custom'">接口地址<input v-model="searchForm.search_base_url" placeholder="https:// 公网地址（必填）" /></label>
+            <p v-else class="gateway-hint gateway-official-url">接口地址：{{ searchProviderOfficialUrls[searchForm.search_provider] }}（官方固定，不可修改）</p>
+          </div>
+          <label v-if="searchForm.search_provider === 'deepseek'">检索模型<input v-model="searchForm.search_model" placeholder="留空使用默认 deepseek-v4-flash" /></label>
+          <label>搜索 API Key<input v-model="searchForm.search_api_key" type="password" :placeholder="gatewayConfig?.search_api_key ? `当前：${gatewayConfig.search_api_key}` : '请输入 API Key'" /></label>
+          <div class="question-bank-number-grid">
+            <label>超时（秒）<input v-model.number="searchForm.search_timeout_seconds" type="number" min="3" max="120" /></label>
+            <label>最大结果数<input v-model.number="searchForm.search_max_results" type="number" min="1" max="50" /></label>
+          </div>
+          <div class="gateway-actions">
+            <button class="secondary" type="button" :disabled="searchTesting" @click="testSearchConfig">{{ searchTesting ? "测试中..." : "测试搜索接口" }}</button>
+            <button class="primary" type="button" :disabled="searchSaving || !canManageGateway" @click="saveSearchConfig">{{ searchSaving ? "保存中..." : "保存搜索配置" }}</button>
+          </div>
+          <p v-if="searchTestResult" class="gateway-test-result" :class="searchTestResult.ok ? 'gateway-test-ok' : 'gateway-test-fail'">{{ searchTestResult.text }}</p>
+        </section>
+
+        <section class="module-block gateway-card">
+          <header class="module-block-header">
+            <h2>大模型配置<span>可选</span></h2>
+          </header>
+          <p class="gateway-hint">用于报告生成与公司情报分析的大模型。全部留空则使用服务器 .env 中的 DeepSeek 配置。接口地址仅支持 DeepSeek 官方域名（https://api.deepseek.com）或通过安全校验的公网 https 服务，且更换地址时必须同时填写新的 LLM Key（系统会自动拼接 /v1/chat/completions）。</p>
+          <label>接口地址<input v-model="llmForm.llm_base_url" placeholder="如 https://api.deepseek.com" /></label>
+          <div class="question-bank-number-grid">
+            <label>LLM API Key<input v-model="llmForm.llm_api_key" type="password" :placeholder="gatewayConfig?.llm_api_key ? `当前：${gatewayConfig.llm_api_key}` : '留空使用 .env'" /></label>
+            <label>模型名称<input v-model="llmForm.llm_model" placeholder="如 deepseek-chat" /></label>
+          </div>
+          <div class="gateway-actions">
+            <button class="secondary" type="button" :disabled="llmTesting" @click="testLlmConfig">{{ llmTesting ? "测试中..." : "测试大模型" }}</button>
+            <button class="primary" type="button" :disabled="llmSaving || !canManageGateway" @click="saveLlmConfig">{{ llmSaving ? "保存中..." : "保存大模型配置" }}</button>
+          </div>
+          <p v-if="llmTestResult" class="gateway-test-result" :class="llmTestResult.ok ? 'gateway-test-ok' : 'gateway-test-fail'">{{ llmTestResult.text }}</p>
         </section>
       </div>
 

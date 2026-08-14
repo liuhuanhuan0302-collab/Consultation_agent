@@ -2614,3 +2614,134 @@ th {
     height: 150px;
   }
 }
+
+/* ── API 网关配置 ─────────────────────────────────────────────── */
+.gateway-card {
+  padding: 18px;
+}
+
+.gateway-card label {
+  color: #344054;
+  display: grid;
+  font-size: 14px;
+  font-weight: 700;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.gateway-card label:first-of-type {
+  margin-top: 0;
+}
+
+.gateway-hint {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 6px 0 2px;
+}
+
+.gateway-check {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.gateway-check input {
+  height: 18px;
+  width: 18px;
+}
+
+.gateway-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* ── 线索详情：企业情报与 AI 分析 ─────────────────────────────── */
+.company-research-sections {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.company-research-item {
+  background: #f8fafc;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.company-research-item span,
+.company-research-sources > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.company-research-item p {
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+  white-space: pre-line;
+}
+
+.company-research-sources {
+  margin-top: 12px;
+}
+
+.company-research-sources ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.company-research-sources a {
+  color: #176b87;
+  font-size: 13px;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+@media (max-width: 900px) {
+  .company-research-sections {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gateway-test-result {
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 12px;
+  padding: 10px 12px;
+}
+
+.gateway-test-ok {
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+  color: #067647;
+}
+
+.gateway-test-fail {
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+  color: #b42318;
+}
+
+.gateway-key-warning {
+  background: #fffaeb;
+  border: 1px solid #fedf89;
+  border-radius: 6px;
+  color: #93370d;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 4px 0 10px;
+  padding: 10px 12px;
+}
+
+.gateway-official-url {
+  align-self: end;
+  padding-bottom: 4px;
+}

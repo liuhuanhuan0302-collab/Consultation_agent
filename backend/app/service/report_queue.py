@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus
+from app.service.company_research import research_company
 from app.service.email_service import send_report_pdf_email
 from app.service.pdf_service import render_report_html_attachment, render_report_pdf_bytes, report_public_url
 from app.service.reporting import generate_report_content, report_generation_semaphore
@@ -141,6 +142,7 @@ async def process_report_delivery_job(job_id: int) -> bool:
             report.status = ReportStatus.generating.value
             db.commit()
             db.refresh(report)
+            await research_company(db, report)  # 联网情报检索，失败静默降级
             async with report_generation_semaphore():
                 await generate_report_content(db, report)
         pdf = await render_report_pdf_bytes(report)
