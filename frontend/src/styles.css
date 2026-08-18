@@ -1664,40 +1664,102 @@ textarea:focus {
   width: 22%;
 }
 
-/* 能力成熟度分析：每个模块一个表格（题目明细 + 分析） */
+/* 能力成熟度分析：每个模块一个表格（标题条 + 题目明细 + 分析） */
 .report-document .report-module-tables {
   display: grid;
-  gap: 18px;
+  gap: 20px;
 }
 
-.report-document .report-module-table {
-  margin: 0;
+.report-document .report-module-block {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
 }
 
-.report-document .report-module-table thead tr:first-child th {
+.report-document .report-module-head {
   background: linear-gradient(135deg, #5848c8, #1677ff);
   color: #fff;
   font-size: 15px;
   font-weight: 700;
-  text-align: left;
+  line-height: 1.5;
+  padding: 12px 18px;
 }
 
-.report-document .report-module-table thead tr:last-child th {
+/* 三栏表格：核心结论 | 数据依据 | 分析解读 */
+.report-document .report-cad-table {
+  table-layout: fixed;
+  width: 100%;
+  margin: 0;
+  border: 0;
+}
+
+.report-document .report-cad-table thead th {
   background: #eef2f9;
   color: #334155;
   font-size: 13px;
 }
 
-.report-document .report-module-table td:nth-child(1) {
-  width: 64px;
-  white-space: nowrap;
-  text-align: center;
+.report-document .report-cad-table thead th:nth-child(1) {
+  width: 20%;
 }
 
-.report-document .report-module-table td:nth-child(3) {
-  width: 72px;
-  white-space: nowrap;
+.report-document .report-cad-table thead th:nth-child(2) {
+  width: 34%;
+}
+
+.report-document .report-cad-table thead th:nth-child(3) {
+  width: 46%;
+}
+
+.report-document .report-cad-table .report-cad-conclusion {
+  background: #f8faff;
+  color: #1e293b;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.8;
+  vertical-align: top;
+}
+
+.report-document .report-cad-table .report-cad-evidence {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.8;
+  vertical-align: top;
+}
+
+.report-document .report-cad-table .report-cad-interpretation {
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.85;
+  vertical-align: top;
+}
+
+.report-document .report-module-table {
+  table-layout: fixed;
+  width: 100%;
+  margin: 0;
+  border: 0;
+}
+
+.report-document .report-module-table thead th {
+  background: #eef2f9;
+  color: #334155;
+  font-size: 13px;
+}
+
+.report-document .report-module-table thead tr th:nth-child(1),
+.report-document .report-module-table tbody tr:not(.report-module-analysis) td:nth-child(1) {
+  width: 64px;
   text-align: center;
+  white-space: nowrap;
+}
+
+.report-document .report-module-table thead tr th:nth-child(3),
+.report-document .report-module-table tbody tr:not(.report-module-analysis) td:nth-child(3) {
+  width: 72px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .report-document .report-module-table .report-module-analysis td {
@@ -1708,7 +1770,7 @@ textarea:focus {
 }
 
 .report-document .report-dimension-rate {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 800;
   white-space: nowrap;
 }

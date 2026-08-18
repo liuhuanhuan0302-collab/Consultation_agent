@@ -321,7 +321,14 @@ def build_deepseek_prompt(payload: dict) -> str:
     {{"finding": "核心发现（一句话）", "evidence": "证据与含义（必须引用具体题目编号与得分、维度得分率）"}}
   ],
   "dimension_analysis": [
-    {{"module_code": "M01", "module_name": "维度简称", "analysis": "该维度现状分析（200-350 字，必须结合该维度对应题目的得分解释）"}}
+    {{
+      "module_code": "M01",
+      "module_name": "维度简称",
+      "core_conclusion": "核心结论（一句话：该维度得分率 + 总体特征定性）",
+      "evidence_rows": [
+        {{"evidence": "数据依据（引用题号、题干与得分，如 Q4“用户满意度/NPS/复购率在战略目标和绩效考核中的权重”得分4/4（100%））", "interpretation": "分析解读（解释该组数据说明的管理含义）"}}
+      ]
+    }}
   ],
   "key_contradictions": [
     {{"contradiction": "矛盾名（如：局部清晰 vs. 整体模糊）", "evidence": "证据（引用得分对比）", "diagnosis": "诊断（一句话点破本质）"}}
@@ -337,7 +344,10 @@ def build_deepseek_prompt(payload: dict) -> str:
 
 要求：
 1. executive_summary 4-6 条，每条必须引用具体题目编号/得分率作为证据，不得空泛套话。
-2. dimension_analysis 必须覆盖全部 {len(dimensions)} 个模块，逐个结合该模块对应题目的得分给出分析，按 module_code 与下方诊断数据中的 dimensions 一致。
+2. dimension_analysis 必须覆盖全部 {len(dimensions)} 个模块，逐个结合该模块对应题目的得分给出分析，按 module_code 与下方诊断数据中的 dimensions 一致。每个模块按“核心结论 / 数据依据 / 分析解读”三栏组织：
+   - core_conclusion：一句话核心结论（包含该维度得分率与总体特征定性，如“该维度得分率46.43%，呈现‘理念强、机制弱’的特征。”）。
+   - evidence_rows：3-5 行，每行是“数据依据 + 分析解读”配对；数据依据必须引用具体题号、题干与得分（含百分比），按“高分项 → 中分项 → 低分/0分项”的顺序组织；分析解读解释该组数据反映的管理含义。
+   - 最后一行 evidence_rows 的 interpretation 应落到“对该公司业务意味着什么 + 具体建议”。
 3. key_contradictions 3-5 条，体现“强项与弱项之间的张力”，证据必须来自得分对比（如某维度高 vs 另一维度低）。
 4. workshop_topics 4-6 条，用 P0/P1/P2 分级，议题要贴合该公司所处行业与当前现状。
 5. ai_scenarios 3-5 个，必须结合下方“公司公开信息”中的行业、业务、挑战与 AI 机会，给出贴合该公司实际的具体场景，不得套用无关行业案例。
@@ -410,14 +420,11 @@ def render_structured_report_html(payload: dict, data: dict) -> str:
         for index, item in enumerate(summary_items, start=1)
     )
 
-    # 二、能力成熟度逐维分析：每个模块一个表格（题目得分明细 + AI 分析）
+    # 二、能力成熟度逐维分析：每个模块一个三栏表格（核心结论 | 数据依据 | 分析解读）
     analysis_by_code = {
         str(item.get("module_code") or "").upper(): item
         for item in (data.get("dimension_analysis") or [])
     }
-    questions_by_module: dict[str, list[dict]] = {}
-    for item in (payload.get("question_scores") or []):
-        questions_by_module.setdefault(str(item.get("module_code") or "").upper(), []).append(item)
     module_tables = ""
     for dim in dimensions:
         code = str(dim.get("module_code") or "").upper()
@@ -426,9 +433,8 @@ def render_structured_report_html(payload: dict, data: dict) -> str:
         raw = dim.get("raw_score")
         max_score = dim.get("max_score")
         analysis_item = analysis_by_code.get(code) or {}
-        analysis = str(analysis_item.get("analysis") or "").strip()
-        if not analysis:
-            analysis = f"{dim.get('module_name')}维度得分率为 {rate}%，建议结合具体业务场景进一步核验短板与负责人。"
+        core_conclusion = str(analysis_item.get("core_conclusion") or "").strip()
+        evidence_rows = analysis_item.get("evidence_rows") or []
         if rate < 25:
             rate_class = "rate-danger"
         elif rate < 50:
@@ -438,27 +444,47 @@ def render_structured_report_html(payload: dict, data: dict) -> str:
         else:
             rate_class = "rate-good"
         score_note = f"（{raw}/{max_score}）" if raw is not None and max_score else ""
-        question_rows = ""
-        for q in questions_by_module.get(code, []):
-            question_rows += f"""
-            <tr>
-              <td>{html.escape(str(q.get("question_code") or ""))}</td>
-              <td>{html.escape(str(q.get("question_text") or ""))}</td>
-              <td>{q.get("score")}/{q.get("max_score")}</td>
-            </tr>
+        module_head = (
+            f'<div class="report-module-head">{code} {name} · 得分率 '
+            f'<span class="report-dimension-rate {rate_class}">{rate}%</span>{score_note}</div>'
+        )
+        if core_conclusion and evidence_rows:
+            rows_html = ""
+            for index, row in enumerate(evidence_rows):
+                evidence = str(row.get("evidence") or "").strip()
+                interpretation = str(row.get("interpretation") or "").strip()
+                conclusion_cell = (
+                    f'<td class="report-cad-conclusion">{html.escape(core_conclusion)}</td>'
+                    if index == 0
+                    else '<td class="report-cad-conclusion"></td>'
+                )
+                rows_html += f"""
+                <tr>
+                  {conclusion_cell}
+                  <td class="report-cad-evidence">{html.escape(evidence)}</td>
+                  <td class="report-cad-interpretation">{html.escape(interpretation)}</td>
+                </tr>
+                """
+            module_tables += f"""
+            <div class="report-module-block">
+              {module_head}
+              <table class="report-finding-table report-cad-table">
+                <thead><tr><th>核心结论</th><th>数据依据</th><th>分析解读</th></tr></thead>
+                <tbody>{rows_html}</tbody>
+              </table>
+            </div>
             """
-        module_tables += f"""
-        <table class="report-finding-table report-module-table">
-          <thead>
-            <tr><th colspan="3">{code} {name} · 得分率 <span class="report-dimension-rate {rate_class}">{rate}%</span>{score_note}</th></tr>
-            <tr><th>题号</th><th>题目</th><th>得分</th></tr>
-          </thead>
-          <tbody>
-            {question_rows}
-            <tr class="report-module-analysis"><td colspan="3">{html.escape(analysis)}</td></tr>
-          </tbody>
-        </table>
-        """
+        else:
+            # 兼容旧格式：仅有一段分析文本
+            analysis = str(analysis_item.get("analysis") or "").strip()
+            if not analysis:
+                analysis = f"{dim.get('module_name')}维度得分率为 {rate}%，建议结合具体业务场景进一步核验短板与负责人。"
+            module_tables += f"""
+            <div class="report-module-block">
+              {module_head}
+              <div class="report-module-body">{html.escape(analysis)}</div>
+            </div>
+            """
 
     # 三、关键矛盾与核心诊断
     contradiction_rows = "".join(

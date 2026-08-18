@@ -24,7 +24,15 @@ def _report_data() -> dict:
             {"finding": "战略清晰度是全卷最低点", "evidence": "Q5 仅 3.69 分，4-5 分占比 44.4%。"}
         ],
         "dimension_analysis": [
-            {"module_code": "M01", "module_name": "一心", "analysis": "一心维度得分率 42.9%，用户洞察相关题目偏低，建议优先补齐。"},
+            {
+                "module_code": "M01",
+                "module_name": "一心",
+                "core_conclusion": "该维度得分率42.86%，呈现“理念强、机制弱”的特征。",
+                "evidence_rows": [
+                    {"evidence": "Q4“用户满意度在绩效考核中的权重”得分4/4（100%）", "interpretation": "说明公司上下有较强的用户导向意识；"},
+                    {"evidence": "但Q1“系统性的用户研究与洞察机制”仅1/4（25%）", "interpretation": "说明用户声音获取和传导依赖个案或经验，缺乏机制化闭环。"},
+                ],
+            },
             {"module_code": "M02", "module_name": "简化业务", "analysis": "简化业务维度得分率 64.3%，业务聚焦有一定基础。"},
         ],
         "key_contradictions": [
@@ -65,10 +73,18 @@ def test_structured_report_renders_all_six_sections():
     assert "选择唯一主战役" in html
     assert "销售线索评分助手" in html
     assert "两周内完成事实核验" in html
-    # 维度分析按模块对齐（表格形式）
+    # 维度分析按模块对齐（三栏表格形式）
     assert "M01 一心" in html
-    assert "42.9%" in html
+    assert "42.86%" in html
     assert "12/28" in html
+    # 三栏表格：核心结论 | 数据依据 | 分析解读
+    assert "核心结论" in html
+    assert "数据依据" in html
+    assert "分析解读" in html
+    assert "该维度得分率42.86%，呈现“理念强、机制弱”的特征。" in html
+    assert "说明用户声音获取和传导依赖个案或经验，缺乏机制化闭环。" in html
+    # 旧格式回退：仅 analysis 文本的模块仍渲染为段落
+    assert "简化业务维度得分率 64.3%" in html
     # XSS 转义
     assert "<script>" not in html
 
