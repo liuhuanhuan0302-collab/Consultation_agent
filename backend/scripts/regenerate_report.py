@@ -19,6 +19,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from app.database import SessionLocal
 from app.models import Report, ReportStatus
 from app.service.reporting import regenerate_report_content_for_testing
+from sqlalchemy.orm import Session
 
 
 def _verify(html: str) -> dict[str, bool]:
@@ -31,11 +32,11 @@ def _verify(html: str) -> dict[str, bool]:
     return checks
 
 
-async def regenerate(report: Report) -> bool:
+async def regenerate(db: Session, report: Report) -> bool:
     print(f"regenerating report id={report.id} title={report.title} ...")
     print(f"  before: status={report.status} html_len={len(report.html_content or '')}")
     try:
-        await regenerate_report_content_for_testing(report)
+        await regenerate_report_content_for_testing(db, report)
         print(f"  after:  status={report.status} html_len={len(report.html_content or '')}")
         print(f"  model: {report.model_name} error: {report.generation_error}")
         for name, ok in _verify(report.html_content or "").items():
@@ -65,7 +66,7 @@ async def main() -> None:
             print(f"found {len(reports)} generated reports")
             ok = 0
             for report in reports:
-                if await regenerate(report):
+                if await regenerate(db, report):
                     ok += 1
             print(f"done: {ok}/{len(reports)} regenerated successfully")
         elif args.company:
@@ -82,13 +83,13 @@ async def main() -> None:
             if not report:
                 print(f"no report found for company containing '{args.company}'")
                 return
-            await regenerate(report)
+            await regenerate(db, report)
         elif args.report_id:
             report = db.query(Report).filter(Report.id == args.report_id).first()
             if not report:
                 print(f"report {args.report_id} not found")
                 return
-            await regenerate(report)
+            await regenerate(db, report)
         else:
             parser.print_help()
     finally:
