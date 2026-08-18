@@ -101,6 +101,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ email })
     }),
+  deleteLead: (leadId: number) =>
+    request<{ message: string }>(`/api/admin/leads/${leadId}`, { method: "DELETE" }),
   leadWordExport: (leadId: number) => downloadFile(`/api/admin/leads/${leadId}/export/word`, `lead-${leadId}.docx`),
   leadsExport: () => downloadFile("/api/admin/leads/export", "leads.csv"),
   gatewayConfig: () => request<GatewayConfig>("/api/admin/api-gateway"),

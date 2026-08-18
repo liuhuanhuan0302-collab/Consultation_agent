@@ -126,3 +126,41 @@ def get_answer_map(db: Session, submission_id: int) -> dict[int, int]:
 
 def delete_dimension_scores(db: Session, submission_id: int) -> None:
     db.query(DimensionScore).filter(DimensionScore.submission_id == submission_id).delete()
+
+
+def delete_lead_cascade(db: Session, lead: CompanyLead) -> None:
+    """级联删除一条客户线索及其全部关联数据（答卷、报告、AI 消息、投递任务、埋点）。
+
+    删除后该线索不再存在，前端会话可重新开始填写。
+    """
+    from app.models import (
+        AiConversationMessage,
+        QuestionAnswer,
+        Recommendation,
+        ReportDeliveryJob,
+        TrackingEvent,
+    )
+
+    submission_ids = [row.id for row in db.query(DiagnosisSubmission.id).filter(DiagnosisSubmission.lead_id == lead.id).all()]
+    report_ids = (
+        [row.id for row in db.query(Report.id).filter(Report.submission_id.in_(submission_ids)).all()]
+        if submission_ids
+        else []
+    )
+
+    if report_ids:
+        db.query(Recommendation).filter(Recommendation.report_id.in_(report_ids)).delete()
+        db.query(AiConversationMessage).filter(AiConversationMessage.report_id.in_(report_ids)).delete()
+        db.query(ReportDeliveryJob).filter(ReportDeliveryJob.report_id.in_(report_ids)).delete()
+        db.query(Report).filter(Report.id.in_(report_ids)).delete()
+    if submission_ids:
+        db.query(AiConversationMessage).filter(AiConversationMessage.submission_id.in_(submission_ids)).delete()
+        db.query(ReportDeliveryJob).filter(ReportDeliveryJob.submission_id.in_(submission_ids)).delete()
+        db.query(QuestionAnswer).filter(QuestionAnswer.submission_id.in_(submission_ids)).delete()
+        db.query(DimensionScore).filter(DimensionScore.submission_id.in_(submission_ids)).delete()
+        db.query(DiagnosisSubmission).filter(DiagnosisSubmission.id.in_(submission_ids)).delete()
+
+    db.query(AiConversationMessage).filter(AiConversationMessage.lead_id == lead.id).delete()
+    db.query(ReportDeliveryJob).filter(ReportDeliveryJob.lead_id == lead.id).delete()
+    db.query(TrackingEvent).filter(TrackingEvent.lead_id == lead.id).delete()
+    db.delete(lead)

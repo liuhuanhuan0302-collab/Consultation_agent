@@ -146,6 +146,7 @@ const {
   searchTestResult,
   llmTestResult,
   canExportLeads,
+  canDeleteLeads,
   canManageQuestionBank,
   canManageGateway,
   leadIndustryOptions,
@@ -167,6 +168,7 @@ const {
   updateLeadDiagnosticEmail,
   exportLeads,
   exportLeadWord,
+  deleteLead,
   logoutAdmin,
   createCase,
   createChannel,
@@ -338,7 +340,7 @@ onBeforeUnmount(clearReportPolling);
         </div>
         <div class="leads-table-wrap">
           <table class="leads-table">
-            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>最近处理时间</th></tr></thead>
+            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>最近处理时间</th><th v-if="canDeleteLeads">操作</th></tr></thead>
             <tbody>
               <tr v-for="lead in pagedLeads" :key="lead.id" class="clickable-row" tabindex="0" @click="openLeadDetail(lead)" @keydown.enter="openLeadDetail(lead)">
                 <td :title="lead.company_name || ''">{{ lead.company_name }}</td>
@@ -348,9 +350,12 @@ onBeforeUnmount(clearReportPolling);
                 <td :title="lead.phone || lead.wechat || ''">{{ lead.phone || lead.wechat }}</td>
                 <td><span class="pill" :class="lead.lead_level">{{ lead.lead_level }}</span></td>
                 <td>{{ formatDateTime(lead.last_activity_at || lead.updated_at || lead.created_at) }}</td>
+                <td v-if="canDeleteLeads" class="lead-row-actions">
+                  <button class="icon-button danger-icon-button" type="button" :title="`删除线索：${lead.company_name || lead.id}`" @click.stop="deleteLead(lead)"><Trash2 :size="16" /></button>
+                </td>
               </tr>
               <tr v-if="!pagedLeads.length">
-                <td colspan="7" class="empty-cell">暂无符合条件的线索</td>
+                <td :colspan="canDeleteLeads ? 8 : 7" class="empty-cell">暂无符合条件的线索</td>
               </tr>
             </tbody>
           </table>
@@ -372,6 +377,12 @@ onBeforeUnmount(clearReportPolling);
             <h2 id="lead-detail-title">{{ selectedLeadDetail?.lead.company_name || "客户详情" }}</h2>
           </div>
           <div class="lead-detail-actions">
+            <button
+              v-if="selectedLeadDetail && canDeleteLeads"
+              class="danger-text-button"
+              type="button"
+              @click="deleteLead(selectedLeadDetail.lead)"
+            ><Trash2 :size="16" /> 删除该线索</button>
             <button
               v-if="selectedLeadDetail && canExportLeads"
               class="primary"

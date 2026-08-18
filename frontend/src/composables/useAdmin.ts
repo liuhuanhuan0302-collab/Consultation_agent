@@ -304,6 +304,22 @@ export function useAdmin() {
     }
   }
 
+  async function deleteLead(lead: Lead | { id: number; company_name?: string | null }) {
+    const name = "company_name" in lead && lead.company_name ? `「${lead.company_name}」` : `#${lead.id}`;
+    if (!window.confirm(`确定删除线索 ${name} 吗？\n将同时删除该客户的企业信息、全部答题、评分与诊断报告，且无法恢复。删除后该客户可重新填写。`)) return;
+    const leadId = lead.id;
+    const wasDetailOpen = selectedLeadDetail.value?.lead.id === leadId;
+    error.value = "";
+    try {
+      const result = await api.deleteLead(leadId);
+      adminNotice.value = result.message;
+      if (wasDetailOpen) closeLeadDetail();
+      await loadAdminTab("leads");
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "删除线索失败";
+    }
+  }
+
   async function logoutAdmin() {
     await api.logout().catch(() => undefined);
     clearAdminSession();
@@ -649,6 +665,7 @@ export function useAdmin() {
   }
 
   const canExportLeads = computed(() => ["admin", "operator", "sales"].includes(adminUser.value?.role || ""));
+  const canDeleteLeads = computed(() => adminUser.value?.role === "admin");
   const canManageQuestionBank = computed(() => ["admin", "operator"].includes(adminUser.value?.role || ""));
   const canManageGateway = computed(() => adminUser.value?.role === "admin");
   const leadIndustryOptions = computed(() => ["全部行业", ...Array.from(new Set(leads.value.map((lead) => lead.industry || "未填写").filter(Boolean)))]);
@@ -734,6 +751,7 @@ export function useAdmin() {
     searchTestResult,
     llmTestResult,
     canExportLeads,
+    canDeleteLeads,
     canManageQuestionBank,
     canManageGateway,
     leadIndustryOptions,
@@ -756,6 +774,7 @@ export function useAdmin() {
     updateLeadDiagnosticEmail,
     exportLeads,
     exportLeadWord,
+    deleteLead,
     logoutAdmin,
     createCase,
     createChannel,

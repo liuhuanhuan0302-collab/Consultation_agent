@@ -2,7 +2,7 @@
 
 import { computed, nextTick, reactive, ref, watch, type Ref } from "vue";
 
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import type { QuestionModule, Report, ScoreResponse } from "../types";
 import { appUrl, sourceFromUrl } from "../utils/appPaths";
 import { isValidEmail } from "../utils/format";
@@ -175,6 +175,21 @@ export function useQuestionnaire() {
     window.location.assign(appUrl(`/report/${token}`));
   }
 
+  function clearQuestionnaireResidue() {
+    localStorage.removeItem("diagnosis_lead_id");
+    localStorage.removeItem("submission_id");
+    localStorage.removeItem("diagnosis_report_token");
+    localStorage.removeItem("diagnosis_step");
+    localStorage.removeItem("diagnosis_module_index");
+    localStorage.removeItem("diagnosis_answers");
+    localStorage.removeItem("diagnosis_lead_form");
+    submissionId.value = null;
+    leadId.value = null;
+    Object.assign(leadForm, defaultLeadForm);
+    selectedAiFocus.value = [];
+    aiFocusOther.value = "";
+  }
+
   async function checkSubmittedReport(): Promise<boolean> {
     if (!sessionToken.value) return false;
     const cachedReportToken = localStorage.getItem("diagnosis_report_token");
@@ -191,7 +206,12 @@ export function useQuestionnaire() {
         openReportPage(currentReport.public_token);
         return true;
       }
-    } catch {
+    } catch (err) {
+      // 报告或答卷已被删除（如管理员在后台删除该线索）时，清除本地残留，允许重新填写。
+      if (err instanceof ApiError && err.status === 404) {
+        clearQuestionnaireResidue();
+        return false;
+      }
       // 尚未创建报告时继续保留在原来的填写/答题流程。
     }
     return false;

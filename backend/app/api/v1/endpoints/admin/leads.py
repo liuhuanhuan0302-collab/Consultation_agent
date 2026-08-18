@@ -14,14 +14,14 @@ from sqlalchemy.orm import Session
 from app.api.v1.endpoints.admin._shared import escape_csv_cell
 from app.database import SessionLocal, get_db
 from app.models import AiConversationMessage, CompanyLead, ExportLog, Report, ReportDeliveryJob, User
-from app.repositories.consult_repo import latest_submission_for_lead, list_leads
+from app.repositories.consult_repo import delete_lead_cascade, latest_submission_for_lead, list_leads
 from app.repositories.qr_code_repo import get_channel_by_code
 from app.schemas import LeadDiagnosticEmailUpdate, LeadResponse, MessageResponse
 from app.service.api_gateway_service import effective_search_config
 from app.service.company_research import research_company
 from app.service.lead_export_service import generate_lead_export_docx
 from app.service.report_queue import enqueue_report_delivery, process_next_report_delivery
-from app.utils.auth import LeadExporter, LeadViewer
+from app.utils.auth import AdminOnly, LeadExporter, LeadViewer
 from app.utils.logging_utils import write_operation_log
 
 router = APIRouter()
@@ -266,6 +266,27 @@ def admin_get_lead_detail(lead_id: int, db: Session = Depends(get_db), user: Use
             "sent_at": delivery.sent_at,
         } if delivery else None,
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# 3.6.5 删除线索（级联清理）
+# ══════════════════════════════════════════════════════════════════
+# 方法：DELETE
+# 路径：/api/admin/leads/{lead_id}
+# 功能：删除一条客户线索及其全部关联数据（企业信息、答题、评分、报告、
+#       AI 会话消息、报告投递任务、埋点事件）。删除后该客户可重新填写。
+# 鉴权：仅 admin
+@router.delete("/api/admin/leads/{lead_id}", response_model=MessageResponse)
+def admin_delete_lead(lead_id: int, db: Session = Depends(get_db), user: User = Depends(AdminOnly)) -> MessageResponse:
+    lead = db.query(CompanyLead).filter(CompanyLead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    company_name = lead.company_name
+    delete_lead_cascade(db, lead)
+    write_operation_log(db, user, "delete_lead", "lead", str(lead_id), {"company_name": company_name})
+    db.commit()
+    return MessageResponse(message=f"已删除线索「{company_name or lead_id}」及其全部关联数据")
 
 
 # ══════════════════════════════════════════════════════════════════

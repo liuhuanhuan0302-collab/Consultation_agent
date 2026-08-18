@@ -2742,6 +2742,44 @@ th {
   color: #8f1b13;
 }
 
+/* 线索删除：列表行内按钮 */
+.lead-row-actions {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.lead-row-actions .icon-button {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+  vertical-align: middle;
+}
+
+.leads-table .clickable-row:hover .lead-row-actions .icon-button,
+.leads-table .clickable-row:focus-visible .lead-row-actions .icon-button {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .lead-row-actions .icon-button {
+    opacity: 1;
+  }
+}
+
+/* 线索删除：详情页头部按钮 */
+.lead-detail-actions .danger-text-button {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  margin-top: 0;
+  padding: 7px 12px;
+  font-weight: 600;
+}
+
+.lead-detail-actions .danger-text-button:hover {
+  background: #fee2e2;
+  color: #b42318;
+}
+
 .loading {
   color: #667085;
   padding: 24px;
