@@ -470,6 +470,9 @@ onBeforeUnmount(clearReportPolling);
               </div>
             </div>
             <p v-else class="empty-detail">尚未生成企业情报（需在 API 配置中启用联网搜索）。</p>
+            <div v-if="selectedLeadDetail.report?.generation_error" class="generation-error-banner">
+              <strong>生成提示：</strong>{{ selectedLeadDetail.report.generation_error }}
+            </div>
             <div v-if="!selectedLeadDetail.report?.company_research" class="research-trigger">
               <button class="secondary" type="button" :disabled="researchRunning" @click="runLeadResearch">
                 {{ researchRunning ? "正在联网检索企业信息…" : "手动搜索企业信息" }}

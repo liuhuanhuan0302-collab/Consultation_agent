@@ -2748,6 +2748,18 @@ th {
   white-space: nowrap;
 }
 
+/* 后台线索详情的生成提示横幅 */
+.generation-error-banner {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.7;
+  margin-top: 12px;
+  padding: 10px 14px;
+}
+
 .lead-row-actions .icon-button {
   opacity: 0.55;
   transition: opacity 0.15s ease;

@@ -267,7 +267,9 @@ def upsert_lead(payload: LeadCreate, request: Request, db: Session = Depends(get
         setattr(lead, field, getattr(payload, field))
 
     submission = latest_submission_for_lead(db, lead.id)
-    if not submission:
+    if not submission or submission.status != SubmissionStatus.draft.value:
+        # 最近一次答卷已提交（或不存在）：重新填写时新建一条答卷，
+        # 避免把新的答题内容提交到已生成的旧报告上。
         submission = DiagnosisSubmission(lead_id=lead.id)
         db.add(submission)
         db.flush()

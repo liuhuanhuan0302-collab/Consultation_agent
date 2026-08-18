@@ -30,6 +30,9 @@ from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
+# 联网情报检索失败重试次数（模型输出偶发含未转义引号导致 JSON 解析失败）
+RESEARCH_RETRY = 2
+
 SECTION_LABELS: list[tuple[str, str]] = [
     ("company_overview", "公司介绍"),
     ("revenue_scale", "营收规模"),
@@ -195,6 +198,7 @@ def build_deepseek_research_prompt(company: dict, dimensions: list[dict]) -> str
 3. "analysis" 字段 500-800 字：结合检索到的公司情报、客户自述信息与诊断答题得分，给出该公司 AI 转型的综合分析——先结合得分率最低的维度诊断现状，再给出 2-3 条最值得做的 AI 场景建议，并说明与客户诉求的关系。
 4. "sources" 列出实际引用的来源，每项含 title 与 url（必须来自搜索引用）。
 5. 只输出 JSON，不要 markdown 代码块，不要任何解释文字。
+6. 严格 JSON 语法：字符串值内如需引用，一律使用中文引号「」或『』，禁止在字符串内使用英文双引号 "；确保输出可被标准 JSON 解析器直接解析。
 
 输出字段说明：
 - company_overview：公司介绍（成立时间、主营业务、行业地位等）
@@ -230,24 +234,34 @@ def build_deepseek_research_prompt(company: dict, dimensions: list[dict]) -> str
 
 
 def parse_research_response(text: str) -> dict | None:
-    """解析模型输出：容忍 markdown 代码块包裹与前后杂质。"""
+    """解析模型输出：容忍 markdown 代码块包裹与前后杂质。
+
+    模型偶发在 JSON 字符串值内直接使用英文双引号导致标准 json.loads
+    失败；该情况由 research_company 的重试机制兜底（失败自动重试）。
+    这里仅做常规的宽松解析。
+    """
     if not text:
         return None
     cleaned = text.strip()
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned)
     if fence:
         cleaned = fence.group(1).strip()
+    return _loads_lenient(cleaned)
+
+
+def _loads_lenient(text: str) -> dict | None:
     try:
-        data = json.loads(cleaned)
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
+        start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:
             return None
         try:
-            data = json.loads(cleaned[start : end + 1])
+            data = json.loads(text[start : end + 1])
+            return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             return None
-    return data if isinstance(data, dict) else None
 
 
 async def _chat_completion(system: str, user: str, override: LlmGatewayOverride) -> str | None:
@@ -377,7 +391,12 @@ async def ping_deepseek_search(config: SearchGatewayConfig, query: str) -> tuple
 
 
 async def research_company(db: Session, report: Report) -> dict | None:
-    """检索目标公司公开信息并生成 7 维情报 + 分析。幂等：已有结果直接返回。"""
+    """检索目标公司公开信息并生成 7 维情报 + 分析。幂等：已有结果直接返回。
+
+    模型输出偶发含未转义引号导致 JSON 解析失败（实测约 20% 概率），
+    因此解析失败自动重试最多 RESEARCH_RETRY 次；重试仍失败时把原因
+    写入 report.generation_error，供后台排查与提醒。
+    """
     if report.company_research_json:
         try:
             return json.loads(report.company_research_json)
@@ -405,36 +424,59 @@ async def research_company(db: Session, report: Report) -> dict | None:
             "position": lead.position,
             "ai_focus": lead.ai_focus,
         }
-        if config.provider == "deepseek":
-            # 一步式：DeepSeek 原生联网搜索直接输出 7 维情报 + 分析 JSON
-            prompt = build_deepseek_research_prompt(company, dimensions)
-            raw, sources = await call_deepseek_web_search(config, prompt)
-            if not raw:
-                logger.info("DeepSeek 联网检索无结果 company=%s", company_name)
-                return None
-            research = parse_research_response(raw)
-            if not research:
-                logger.warning("公司情报模型输出解析失败 report_id=%s", report.id)
-                return None
-            results = sources
-        else:
-            results = await search_company_web(config, company_name)
-            if not results:
-                logger.info("公司情报检索无结果 company=%s", company_name)
-                return None
-            search_text = format_search_results(results)
-            prompt = build_research_prompt(company, search_text, dimensions)
-            raw = await _chat_completion(
-                "你是严谨的企业情报与 AI 转型分析助手，输出必须为合法 JSON。",
-                prompt,
-                effective_llm_override(db),
-            )
-            if not raw:
-                return None
-            research = parse_research_response(raw)
-            if not research:
-                logger.warning("公司情报模型输出解析失败 report_id=%s", report.id)
-                return None
+
+        results: list[dict] = []
+        research: dict | None = None
+        last_error: str | None = None
+        for attempt in range(RESEARCH_RETRY + 1):
+            try:
+                if config.provider == "deepseek":
+                    # 一步式：DeepSeek 原生联网搜索直接输出 7 维情报 + 分析 JSON
+                    prompt = build_deepseek_research_prompt(company, dimensions)
+                    raw, sources = await call_deepseek_web_search(config, prompt)
+                    if not raw:
+                        last_error = "联网检索无返回结果"
+                        logger.info("DeepSeek 联网检索无结果 company=%s", company_name)
+                        continue
+                    research = parse_research_response(raw)
+                    if not research:
+                        last_error = "模型输出 JSON 解析失败（偶发含未转义引号）"
+                        logger.warning("公司情报模型输出解析失败 report_id=%s 第 %s 次", report.id, attempt + 1)
+                        continue
+                    results = sources
+                else:
+                    results = await search_company_web(config, company_name)
+                    if not results:
+                        last_error = "网页检索无结果"
+                        logger.info("公司情报检索无结果 company=%s", company_name)
+                        continue
+                    search_text = format_search_results(results)
+                    prompt = build_research_prompt(company, search_text, dimensions)
+                    raw = await _chat_completion(
+                        "你是严谨的企业情报与 AI 转型分析助手，输出必须为合法 JSON。",
+                        prompt,
+                        effective_llm_override(db),
+                    )
+                    if not raw:
+                        last_error = "情报模型无返回"
+                        continue
+                    research = parse_research_response(raw)
+                    if not research:
+                        last_error = "情报模型输出 JSON 解析失败"
+                        logger.warning("公司情报模型输出解析失败 report_id=%s 第 %s 次", report.id, attempt + 1)
+                        continue
+                break  # 成功
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning("公司情报检索失败 report_id=%s 第 %s 次: %s", report.id, attempt + 1, exc)
+                continue
+
+        if research is None:
+            if last_error:
+                note = f"公司情报检索失败：{last_error}（已重试 {RESEARCH_RETRY} 次）"
+                report.generation_error = note
+                logger.warning("公司情报检索最终失败 report_id=%s: %s", report.id, note)
+            return None
     except Exception as exc:
         logger.warning("公司情报检索失败 report_id=%s: %s", report.id, exc)
         return None
