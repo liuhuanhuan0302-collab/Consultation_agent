@@ -1121,6 +1121,15 @@ textarea:focus {
   margin: 6px 0 0;
 }
 
+.research-trigger {
+  margin-top: 14px;
+}
+
+.research-trigger .secondary {
+  border: 1px solid #c3d3f5;
+  color: #1d4ed8;
+}
+
 .dimension-mini-list {
   display: grid;
   gap: 8px;
@@ -1506,6 +1515,230 @@ textarea:focus {
 .report-document tbody td:first-child {
   font-weight: 600;
   color: #1e293b;
+}
+
+.report-document .report-diagnosis-callout {
+  border-left: 4px solid #1d4f7a;
+  background: #eef5fb;
+  padding: 18px 20px;
+  margin: 0 0 16px;
+}
+
+.report-document .report-diagnosis-callout > strong {
+  display: block;
+  color: #143e63;
+  font-size: 15px;
+  margin-bottom: 7px;
+}
+
+.report-document .report-diagnosis-callout p {
+  margin: 0;
+  color: #294d6e;
+}
+
+.report-document .report-finding-table thead th {
+  background: #193c64;
+  color: #fff;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.report-document .report-finding-table th:first-child,
+.report-document .report-finding-table td:first-child {
+  width: 58px;
+  text-align: center;
+}
+
+.report-document .report-finding-table th:nth-child(2) {
+  width: 30%;
+}
+
+.report-document .report-table-note {
+  display: inline-block;
+  margin-top: 7px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---- 结构化报告：逐维分析 / 工作坊表格 / 优先级标签 ---- */
+.report-document .report-section-note {
+  color: #64748b;
+  font-size: 14px;
+  margin: 0 0 18px;
+}
+
+.report-document .report-dimension-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.report-document .report-dimension-analysis {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 18px 20px;
+  background: #fbfcff;
+}
+
+.report-document .report-dimension-analysis header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.report-document .report-dimension-analysis header > strong {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(135deg, #5848c8, #1677ff);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.report-document .report-dimension-analysis header div h4 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+.report-document .report-dimension-analysis header div span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.report-document .report-dimension-analysis p {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.report-document .report-priority {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: #fff;
+  background: #dc2626;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.report-document .report-priority:not(:empty) {
+  background: #dc2626;
+}
+
+.report-document .report-workshop-table td,
+.report-document .report-workshop-table th {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+/* 关键矛盾 / 工作坊表格：独立列宽，覆盖 finding-table 的窄列（58px / 30%） */
+.report-document .report-contradiction-table th:first-child,
+.report-document .report-contradiction-table td:first-child,
+.report-document .report-workshop-table th:first-child,
+.report-document .report-workshop-table td:first-child {
+  width: auto;
+  text-align: left;
+}
+
+.report-document .report-contradiction-table th:nth-child(2),
+.report-document .report-workshop-table th:nth-child(2) {
+  width: auto;
+}
+
+.report-document .report-contradiction-table th:first-child {
+  width: 24%;
+}
+
+.report-document .report-workshop-table th:first-child {
+  width: 92px;
+}
+
+.report-document .report-workshop-table th:nth-child(2) {
+  width: 22%;
+}
+
+/* 能力成熟度分析：每个模块一个表格（题目明细 + 分析） */
+.report-document .report-module-tables {
+  display: grid;
+  gap: 18px;
+}
+
+.report-document .report-module-table {
+  margin: 0;
+}
+
+.report-document .report-module-table thead tr:first-child th {
+  background: linear-gradient(135deg, #5848c8, #1677ff);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.report-document .report-module-table thead tr:last-child th {
+  background: #eef2f9;
+  color: #334155;
+  font-size: 13px;
+}
+
+.report-document .report-module-table td:nth-child(1) {
+  width: 64px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.report-document .report-module-table td:nth-child(3) {
+  width: 72px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.report-document .report-module-table .report-module-analysis td {
+  background: #f8faff;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.report-document .report-dimension-rate {
+  font-size: 16px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.report-document .rate-danger {
+  color: #ffd7d7;
+}
+
+.report-document .rate-warn {
+  color: #ffe3b3;
+}
+
+.report-document .rate-ok {
+  color: #cfe0ff;
+}
+
+.report-document .rate-good {
+  color: #c8f5d2;
+}
+
+@media (max-width: 767px) {
+  .report-document .report-dimension-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.report-document .report-question-table td:nth-child(1),
+.report-document .report-question-table td:nth-child(3),
+.report-document .report-question-table td:nth-child(4) {
+  white-space: nowrap;
 }
 
 .report-kicker {
@@ -2203,6 +2436,40 @@ th {
 
 .submitted-note {
   max-width: 560px;
+}
+
+.queue-status {
+  align-items: center;
+  background: #eef4ff;
+  border: 1px solid #cdddfb;
+  border-radius: 999px;
+  color: #1d4ed8;
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 9px 18px;
+}
+
+.queue-dot {
+  animation: queue-pulse 1.4s ease-in-out infinite;
+  background: #2563eb;
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+@keyframes queue-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
 }
 
 .module-list {

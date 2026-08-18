@@ -1,7 +1,8 @@
-"""线索管理 — 列表 / CSV 导出 / 详情 / 更正诊断邮箱 / Word 档案导出。"""
+"""线索管理 — 列表 / CSV 导出 / 详情 / 更正诊断邮箱 / Word 档案导出 / 手动企业情报检索。"""
 
 import csv
 import json
+import logging
 import re
 from io import StringIO
 from urllib.parse import quote
@@ -11,17 +12,36 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints.admin._shared import escape_csv_cell
-from app.database import get_db
-from app.models import AiConversationMessage, CompanyLead, ExportLog, ReportDeliveryJob, User
+from app.database import SessionLocal, get_db
+from app.models import AiConversationMessage, CompanyLead, ExportLog, Report, ReportDeliveryJob, User
 from app.repositories.consult_repo import latest_submission_for_lead, list_leads
 from app.repositories.qr_code_repo import get_channel_by_code
 from app.schemas import LeadDiagnosticEmailUpdate, LeadResponse, MessageResponse
+from app.service.api_gateway_service import effective_search_config
+from app.service.company_research import research_company
 from app.service.lead_export_service import generate_lead_export_docx
 from app.service.report_queue import enqueue_report_delivery, process_next_report_delivery
 from app.utils.auth import LeadExporter, LeadViewer
 from app.utils.logging_utils import write_operation_log
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def run_company_research_task(report_id: int) -> None:
+    """后台执行企业情报检索（联网搜索 + AI 提炼），失败仅记录日志不影响请求。"""
+    db = SessionLocal()
+    try:
+        report = db.query(Report).filter(Report.id == report_id).first()
+        if not report:
+            return
+        await research_company(db, report)
+        db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("手动企业情报检索失败 report_id=%s", report_id)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def lead_word_filename(company_name: str | None) -> str:
@@ -246,3 +266,44 @@ def admin_get_lead_detail(lead_id: int, db: Session = Depends(get_db), user: Use
             "sent_at": delivery.sent_at,
         } if delivery else None,
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# 3.6.4 手动检索企业情报与 AI 分析
+# ══════════════════════════════════════════════════════════════════
+# 方法：POST
+# 路径：/api/admin/leads/{lead_id}/research
+# 功能：企业情报未生成时，手动触发联网搜索 + AI 提炼（7 维情报与综合分析）
+#       检索在后台任务中异步执行，接口立即返回；前端轮询线索详情刷新结果
+# 鉴权：admin / operator / sales / consultant
+# 返回：{ status: "started" | "already_generated", message }
+@router.post("/api/admin/leads/{lead_id}/research")
+def trigger_lead_research(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(LeadViewer),
+) -> dict:
+    lead = db.query(CompanyLead).filter(CompanyLead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    submission = latest_submission_for_lead(db, lead.id)
+    report = submission.report if submission else None
+    if not report:
+        raise HTTPException(status_code=404, detail="该线索还没有诊断报告，暂无法检索企业信息")
+
+    company_name = (lead.company_name or "").strip()
+    if len(company_name) < 4:
+        raise HTTPException(status_code=422, detail="公司名称过短（至少 4 个字），无法检索企业信息")
+
+    if report.company_research_json:
+        return {"status": "already_generated", "message": "企业情报已生成，无需重复检索"}
+
+    if not effective_search_config(db):
+        raise HTTPException(status_code=422, detail="联网搜索未启用，请先在「API 配置」页启用并保存搜索 Key")
+
+    write_operation_log(db, user, "trigger_lead_research", "lead", str(lead.id))
+    db.commit()
+    background_tasks.add_task(run_company_research_task, report.id)
+    return {"status": "started", "message": "已开始联网检索企业信息，完成后会自动刷新"}

@@ -75,6 +75,8 @@ export const api = {
   submissionReport: (submissionId: number, sessionToken: string) =>
     request<Report>(`/api/public/submissions/${submissionId}/report?session_token=${encodeURIComponent(sessionToken)}`),
   publicReport: (token: string) => request<Report>(`/api/public/reports/${token}`),
+  regenerateReportForTesting: (token: string) =>
+    request<Report>(`/api/public/reports/${token}/regenerate`, { method: "POST" }),
   emailReport: (token: string, email: string) =>
     request<{ message: string }>(`/api/public/reports/${token}/email`, {
       method: "POST",
@@ -90,6 +92,10 @@ export const api = {
   analytics: () => request<AnalyticsSummary>("/api/admin/analytics/summary"),
   leads: () => request<Lead[]>("/api/admin/leads"),
   leadDetail: (leadId: number) => request<LeadDetail>(`/api/admin/leads/${leadId}`),
+  triggerLeadResearch: (leadId: number) =>
+    request<{ status: string; message?: string }>(`/api/admin/leads/${leadId}/research`, {
+      method: "POST"
+    }),
   updateLeadDiagnosticEmail: (leadId: number, email: string) =>
     request<{ message: string }>(`/api/admin/leads/${leadId}/diagnostic-email`, {
       method: "PUT",

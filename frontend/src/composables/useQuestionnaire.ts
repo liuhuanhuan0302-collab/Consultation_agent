@@ -78,6 +78,8 @@ export function useQuestionnaire() {
   const busy = ref(false);
   const draftSaved = ref(false);
   const reportWaitSeconds = ref(0);
+  const deliveryStatus = ref<string | null>(null);
+  const queuePosition = ref<number | null>(null);
   const reportPollTimer = ref<number | null>(null);
   const reportWaitTimer = ref<number | null>(null);
   const missingNoticeVisible = ref(false);
@@ -182,6 +184,8 @@ export function useQuestionnaire() {
         ? await api.submissionReport(submissionId.value, sessionToken.value)
         : await api.publicReport(cachedReportToken!);
       report.value = currentReport;
+      deliveryStatus.value = currentReport.delivery_status ?? null;
+      queuePosition.value = currentReport.queue_position ?? null;
       localStorage.setItem("diagnosis_report_token", currentReport.public_token);
       if (isReportReady(currentReport)) {
         openReportPage(currentReport.public_token);
@@ -196,6 +200,8 @@ export function useQuestionnaire() {
   function startReportPolling() {
     clearReportPolling();
     reportWaitSeconds.value = 0;
+    deliveryStatus.value = null;
+    queuePosition.value = null;
     reportWaitTimer.value = window.setInterval(() => {
       reportWaitSeconds.value += 1;
     }, 1000);
@@ -452,6 +458,8 @@ export function useQuestionnaire() {
     busy,
     draftSaved,
     reportWaitSeconds,
+    deliveryStatus,
+    queuePosition,
     missingNoticeVisible,
     missingNoticeMessage,
     leadForm,

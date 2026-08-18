@@ -70,6 +70,8 @@ def seed_initial_data(db: Session) -> None:
 
     if not db.query(ChannelSource).filter(ChannelSource.code == "default").first():
         db.add(ChannelSource(code="default", name="默认渠道", description="官网和默认二维码入口"))
+    if not db.query(ChannelSource).filter(ChannelSource.code == "OFFICIAL_WEBSITE").first():
+        db.add(ChannelSource(code="OFFICIAL_WEBSITE", name="官网入口", description="优鲲智能官网 AI 测评入口"))
 
     if not db.query(QuestionModule).first():
         official_modules = load_official_questionnaire()

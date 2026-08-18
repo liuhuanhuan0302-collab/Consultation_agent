@@ -45,6 +45,8 @@ export function useAdmin() {
   const leadDetailOpen = ref(false);
   const leadDetailLoading = ref(false);
   const selectedLeadDetail = ref<LeadDetail | null>(null);
+  const researchRunning = ref(false);
+  let researchPollTimer: number | null = null;
   const diagnosticEmailDraft = ref("");
   const diagnosticEmailUpdating = ref(false);
   const adminQuestions = ref<QuestionModule[]>([]);
@@ -199,6 +201,57 @@ export function useAdmin() {
     leadDetailOpen.value = false;
     selectedLeadDetail.value = null;
     diagnosticEmailDraft.value = "";
+    clearResearchPolling();
+    researchRunning.value = false;
+  }
+
+  function clearResearchPolling() {
+    if (researchPollTimer !== null) {
+      window.clearInterval(researchPollTimer);
+      researchPollTimer = null;
+    }
+  }
+
+  async function runLeadResearch() {
+    const detail = selectedLeadDetail.value;
+    if (!detail || researchRunning.value) return;
+    researchRunning.value = true;
+    error.value = "";
+    adminNotice.value = "";
+    try {
+      const result = await api.triggerLeadResearch(detail.lead.id);
+      adminNotice.value = result.message || "已开始检索";
+      if (result.status === "already_generated") {
+        selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
+        researchRunning.value = false;
+        return;
+      }
+      // 后台任务异步执行，轮询刷新直到情报出现或超时（最长 3 分钟）
+      let attempts = 0;
+      researchPollTimer = window.setInterval(async () => {
+        attempts += 1;
+        try {
+          const refreshed = await api.leadDetail(detail.lead.id);
+          selectedLeadDetail.value = refreshed;
+          if (refreshed.report?.company_research || attempts >= 60) {
+            clearResearchPolling();
+            researchRunning.value = false;
+            if (refreshed.report?.company_research) {
+              adminNotice.value = "企业情报与 AI 分析已生成";
+            } else {
+              error.value = "检索未生成结果：可能公司名称过短或公开信息不足，可稍后重试";
+            }
+          }
+        } catch (err) {
+          clearResearchPolling();
+          researchRunning.value = false;
+          error.value = err instanceof Error ? err.message : "刷新检索结果失败";
+        }
+      }, 3000);
+    } catch (err) {
+      researchRunning.value = false;
+      error.value = err instanceof Error ? err.message : "触发检索失败";
+    }
   }
 
   async function updateLeadDiagnosticEmail() {
@@ -244,7 +297,6 @@ export function useAdmin() {
     error.value = "";
     try {
       await api.leadWordExport(detail.lead.id);
-      adminNotice.value = "客户档案已导出";
     } catch (err) {
       error.value = err instanceof Error ? err.message : "导出客户档案失败";
     } finally {
@@ -656,6 +708,7 @@ export function useAdmin() {
     leadDetailOpen,
     leadDetailLoading,
     selectedLeadDetail,
+    researchRunning,
     diagnosticEmailDraft,
     diagnosticEmailUpdating,
     adminQuestions,
@@ -699,6 +752,7 @@ export function useAdmin() {
     goLeadPage,
     openLeadDetail,
     closeLeadDetail,
+    runLeadResearch,
     updateLeadDiagnosticEmail,
     exportLeads,
     exportLeadWord,

@@ -32,6 +32,16 @@ def test_submission_write_hides_missing_submission(monkeypatch):
     assert exc.value.status_code == 404
 
 
+def test_local_report_regeneration_is_development_only(monkeypatch):
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+
+    monkeypatch.setattr(public, "settings", SimpleNamespace(environment="development"))
+    assert public.is_local_development_request(request) is True
+
+    monkeypatch.setattr(public, "settings", SimpleNamespace(environment="production"))
+    assert public.is_local_development_request(request) is False
+
+
 def test_submit_requires_every_active_question():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

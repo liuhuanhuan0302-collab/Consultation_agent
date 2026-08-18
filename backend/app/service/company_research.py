@@ -41,13 +41,15 @@ SECTION_LABELS: list[tuple[str, str]] = [
 ]
 
 RESEARCH_QUERIES = [
-    "{company} 公司简介 主营业务",
-    "{company} 营收 融资 规模",
-    "{company} 产品 解决方案",
-    "{company} 最新动态 新闻",
+    "{company} 公司简介 主营业务 成立时间",
+    "{company} 营收 融资 员工规模",
+    "{company} 产品 解决方案 客户",
+    "{company} 最新动态 新闻 里程碑",
+    "{company} 所处行业 市场格局 竞争",
+    "{company} 经营挑战 风险 瓶颈",
 ]
 
-SEARCH_TEXT_LIMIT = 12000
+SEARCH_TEXT_LIMIT = 20000
 
 
 def format_search_results(results: list[dict], limit: int = SEARCH_TEXT_LIMIT) -> str:
@@ -141,8 +143,8 @@ def build_research_prompt(company: dict, search_text: str, dimensions: list[dict
 
 要求：
 1. 严格基于检索结果，不得编造事实；营收、融资、人数等数字必须来自检索结果，检索不到时写"公开渠道未披露"。
-2. 每个情报字段 100-200 字，语言精炼，面向转型顾问使用。
-3. "analysis" 字段 300-500 字：结合公司情报、客户自述信息与诊断答题得分，给出该公司 AI 转型的综合分析——先结合得分率最低的维度诊断现状，再给出 2-3 条最值得做的 AI 场景建议，并说明与客户诉求的关系。
+2. 每个情报字段 200-400 字，语言精炼、信息密度高，面向转型顾问使用；尽量覆盖时间、数字、主体等可核实细节。
+3. "analysis" 字段 500-800 字：结合公司情报、客户自述信息与诊断答题得分，给出该公司 AI 转型的综合分析——先结合得分率最低的维度诊断现状，再给出 2-3 条最值得做的 AI 场景建议，并说明与客户诉求的关系。
 4. "sources" 列出实际引用的来源，每项含 title 与 url。
 5. 只输出 JSON，不要 markdown 代码块，不要任何解释文字。
 
@@ -188,9 +190,9 @@ def build_deepseek_research_prompt(company: dict, dimensions: list[dict]) -> str
     return f"""你是企业情报与 AI 转型分析助手。请使用联网搜索工具（web_search）检索目标公司的公开信息，然后输出结构化情报。
 
 要求：
-1. 先联网检索公司介绍、营收融资规模、产品、行业格局、近期动态等信息，必要时多轮搜索补充；数字必须来自搜索结果，检索不到时写"公开渠道未披露"，不得编造。
-2. 每个情报字段 100-200 字，语言精炼，面向转型顾问使用。
-3. "analysis" 字段 300-500 字：结合检索到的公司情报、客户自述信息与诊断答题得分，给出该公司 AI 转型的综合分析——先结合得分率最低的维度诊断现状，再给出 2-3 条最值得做的 AI 场景建议，并说明与客户诉求的关系。
+1. 先联网检索公司介绍、营收融资规模、产品、行业格局、近期动态、经营挑战等信息，必要时多轮搜索补充；数字必须来自搜索结果，检索不到时写"公开渠道未披露"，不得编造。
+2. 每个情报字段 200-400 字，语言精炼、信息密度高，面向转型顾问使用；尽量覆盖时间、数字、主体等可核实细节。
+3. "analysis" 字段 500-800 字：结合检索到的公司情报、客户自述信息与诊断答题得分，给出该公司 AI 转型的综合分析——先结合得分率最低的维度诊断现状，再给出 2-3 条最值得做的 AI 场景建议，并说明与客户诉求的关系。
 4. "sources" 列出实际引用的来源，每项含 title 与 url（必须来自搜索引用）。
 5. 只输出 JSON，不要 markdown 代码块，不要任何解释文字。
 
@@ -352,7 +354,9 @@ def parse_deepseek_responses(data: dict) -> tuple[str, list[dict]]:
 async def call_deepseek_web_search(config: SearchGatewayConfig, prompt: str) -> tuple[str | None, list[dict]]:
     """DeepSeek 原生联网搜索（Responses API + web_search 工具）。返回正文与引用。"""
     model = config.model or DEFAULT_DEEPSEEK_SEARCH_MODEL
-    async with httpx.AsyncClient(timeout=config.timeout_seconds, trust_env=False, follow_redirects=False) as client:
+    # 联网搜索 + 生成通常较慢（响应体大），用更宽松的超时避免读取响应体时 ReadTimeout
+    timeout = max(config.timeout_seconds, 90)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
         response = await client.post(
             f"{config.base_url.rstrip('/')}/responses",
             headers={"Authorization": f"Bearer {config.api_key}"},

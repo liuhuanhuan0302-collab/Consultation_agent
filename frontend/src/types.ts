@@ -49,6 +49,12 @@ export type DimensionScore = {
   risk_level: string;
 };
 
+export type CoreFinding = {
+  finding: string;
+  evidence: string;
+  meaning: string;
+};
+
 export type ScoreResponse = {
   submission_id: number;
   total_score: number;
@@ -74,11 +80,14 @@ export type Report = {
   };
   dimensions?: DimensionScore[];
   low_dimensions?: DimensionScore[];
+  core_findings?: CoreFinding[];
   customer_classification?: {
     lead_level?: string;
     priority_strategy?: string;
     demand_summary?: string;
   };
+  delivery_status?: string | null;
+  queue_position?: number | null;
 };
 
 export type CaseStudy = {

@@ -3,10 +3,10 @@
 
 客户流程：
   1. POST /sessions        → 创建匿名会话，拿到 session_token
-  2. GET  /questions       → 获取 10 模块 68 题
+  2. GET  /questions       → 获取当前启用模块及题目
   3. POST /leads           → 填写企业信息，拿到 submission_id
   4. PUT  /submissions/{}/draft → 答题中随时保存草稿
-  5. POST /submissions/{}/submit → 提交全部 68 题，规则评分并创建邮件发送任务
+  5. POST /submissions/{}/submit → 提交当前全部启用题目，规则评分并创建邮件发送任务
   6. GET  /reports/{token}       → 查看已生成报告（含分数 + 维度数据）
   7. GET  /channels/{code}/qr    → 获取渠道二维码图片
 """
@@ -48,6 +48,7 @@ from app.schemas import (
 )
 from app.service.diagnosis import persist_answers, score_submission
 from app.service.report_queue import enqueue_report_delivery, process_next_report_delivery
+from app.service.reporting import regenerate_report_content_for_testing
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
 from app.utils.request import client_ip
@@ -135,8 +136,14 @@ def serialize_public_report(report: Report) -> dict:
         "score": summary.get("score"),
         "dimensions": summary.get("dimensions", []),
         "low_dimensions": summary.get("low_dimensions", []),
+        "core_findings": summary.get("core_findings", []),
         "customer_classification": summary.get("customer_classification", {}),
     }
+
+
+def is_local_development_request(request: Request) -> bool:
+    """本地提示词测试入口不得在服务器或局域网客户端暴露。"""
+    return settings.environment == "development" and bool(request.client and request.client.host in {"127.0.0.1", "::1"})
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -199,7 +206,7 @@ def track_event(payload: TrackEventRequest, request: Request, db: Session = Depe
 # ══════════════════════════════════════════════════════════════════
 # 方法：GET
 # 路径：/api/public/questions
-# 功能：获取全部活跃模块及题目（10 模块 68 题）
+# 功能：获取全部活跃模块及题目
 #       每题包含 option_text（0=完全没有；1=...；2=...；3=...；4=...）
 # 鉴权：无
 # 请求：无参数
@@ -304,12 +311,12 @@ def save_draft(
 # ══════════════════════════════════════════════════════════════════
 # 方法：POST
 # 路径：/api/public/submissions/{submission_id}/submit
-# 功能：客户提交全部 68 题，系统依次执行：
+# 功能：客户提交当前全部启用题目，系统依次执行：
 #         ① 保存答案 → ② 规则引擎评分 → ③ 创建报告邮件发送任务
 #       后台 worker 再异步调用 DeepSeek、生成 PDF 并发送邮件；
 #       如果 AI 调用失败，worker 自动回退到模板报告。
 # 鉴权：匿名会话凭证 X-Session-Token（必须与答卷归属一致）
-# 请求：{ answers: [{ question_id, score }...] } — 必须包含全部 68 题
+# 请求：{ answers: [{ question_id, score }...] } — 必须包含当前全部启用题目
 #       score 范围 0-4
 # 返回：{
 #         score: { total_score, max_score, score_rate, risk_level,
@@ -410,7 +417,32 @@ def submission_report_status(submission_id: int, session_token: str, db: Session
     report = submission.report
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    return serialize_public_report(report)
+    data = serialize_public_report(report)
+    # 排队进度：返回该报告的投递任务状态与当前排队位置
+    delivery = (
+        db.query(ReportDeliveryJob)
+        .filter(ReportDeliveryJob.report_id == report.id)
+        .order_by(ReportDeliveryJob.id.desc())
+        .first()
+    )
+    if delivery:
+        data["delivery_status"] = delivery.status
+        if delivery.status == ReportDeliveryStatus.queued.value:
+            data["queue_position"] = (
+                db.query(func.count(ReportDeliveryJob.id))
+                .filter(
+                    ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
+                    ReportDeliveryJob.id < delivery.id,
+                )
+                .scalar()
+                or 0
+            ) + 1
+        else:
+            data["queue_position"] = None
+    else:
+        data["delivery_status"] = None
+        data["queue_position"] = None
+    return data
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -453,6 +485,21 @@ def public_report(public_token: str, request: Request, db: Session = Depends(get
         ip_address=client_ip(request),
     )
     db.commit()
+    return serialize_public_report(report)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 本地提示词测试：重生成当前报告，不发送邮件
+# ══════════════════════════════════════════════════════════════════
+@router.post("/api/public/reports/{public_token}/regenerate")
+@limiter.limit("6/hour")
+async def regenerate_report_for_local_testing(public_token: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    if not is_local_development_request(request):
+        raise HTTPException(status_code=404, detail="Not found")
+    report = get_report_by_public_token(db, public_token)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    await regenerate_report_content_for_testing(db, report)
     return serialize_public_report(report)
 
 

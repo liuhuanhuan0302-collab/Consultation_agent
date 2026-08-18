@@ -32,3 +32,5 @@ backend/.idea/
 .git_*_backup/
 backend/.git_*_backup/
 frontend/.git_*_backup/
+tmp/
+

@@ -145,23 +145,34 @@ async def process_report_delivery_job(job_id: int) -> bool:
             await research_company(db, report)  # 联网情报检索，失败静默降级
             async with report_generation_semaphore():
                 await generate_report_content(db, report)
+            # 报告生成与邮件投递是两个独立结果。先固化报告，避免 SMTP/PDF
+            # 失败时异常回滚掉已生成内容，导致客户永久停留在“生成中”。
+            db.commit()
+            db.refresh(report)
         pdf = await render_report_pdf_bytes(report)
         html = render_report_html_attachment(report)
         report_url = report_public_url(report)
-        send_report_pdf_email(
-            job.recipient_email,
-            report.title,
-            pdf,
-            f"diagnosis-report-{report.public_token}.pdf",
-            report_url=report_url,
-            html_bytes=html,
-            html_filename=f"diagnosis-report-{report.public_token}.html",
-        )
+        email_error: str | None = None
+        try:
+            send_report_pdf_email(
+                job.recipient_email,
+                report.title,
+                pdf,
+                f"diagnosis-report-{report.public_token}.pdf",
+                report_url=report_url,
+                html_bytes=html,
+                html_filename=f"diagnosis-report-{report.public_token}.html",
+            )
+        except Exception as exc:  # noqa: BLE001
+            # 邮件失败不阻塞队列：报告（含企业情报）已生成完成，任务视为完成，
+            # 错误单独记录到 last_error 供后台排查；后续可单独补发邮件。
+            logger.warning("报告已生成但邮件发送失败 job_id=%s: %s", job_id, exc)
+            email_error = f"邮件发送失败：{exc}"
 
         job.status = ReportDeliveryStatus.sent.value
         job.sent_at = utc_now()
         job.locked_at = None
-        job.last_error = None
+        job.last_error = email_error
         db.commit()
         return True
     except Exception as exc:

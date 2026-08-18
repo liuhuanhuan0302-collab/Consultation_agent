@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import {
   ArrowLeft,
   ArrowDownToLine,
@@ -17,6 +17,7 @@ import {
   Trash2
 } from "lucide-vue-next";
 import ReportCharts from "./components/ReportCharts.vue";
+import { api } from "./api";
 import { adminNotice, error } from "./composables/feedback";
 import { useAdmin, companyResearchSections, searchProviderOfficialUrls } from "./composables/useAdmin";
 import { useQuestionnaire } from "./composables/useQuestionnaire";
@@ -34,6 +35,8 @@ const {
   busy,
   draftSaved,
   reportWaitSeconds,
+  deliveryStatus,
+  queuePosition,
   missingNoticeVisible,
   missingNoticeMessage,
   leadForm,
@@ -81,6 +84,25 @@ const {
   loadPublicReport,
 } = useReportView(score, report);
 
+const isLocalReportTesting = import.meta.env.DEV && ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+const regeneratingReport = ref(false);
+
+async function regenerateTestReport() {
+  const token = activeReport.value?.public_token;
+  if (!token || regeneratingReport.value) return;
+  regeneratingReport.value = true;
+  error.value = "";
+  try {
+    const regenerated = await api.regenerateReportForTesting(token);
+    if (publicReport.value) publicReport.value = regenerated;
+    if (report.value) report.value = regenerated;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "重新生成报告失败";
+  } finally {
+    regeneratingReport.value = false;
+  }
+}
+
 const {
   adminToken,
   adminUser,
@@ -98,6 +120,7 @@ const {
   leadDetailOpen,
   leadDetailLoading,
   selectedLeadDetail,
+  researchRunning,
   diagnosticEmailDraft,
   diagnosticEmailUpdating,
   adminQuestions,
@@ -140,6 +163,7 @@ const {
   goLeadPage,
   openLeadDetail,
   closeLeadDetail,
+  runLeadResearch,
   updateLeadDiagnosticEmail,
   exportLeads,
   exportLeadWord,
@@ -435,6 +459,11 @@ onBeforeUnmount(clearReportPolling);
               </div>
             </div>
             <p v-else class="empty-detail">尚未生成企业情报（需在 API 配置中启用联网搜索）。</p>
+            <div v-if="!selectedLeadDetail.report?.company_research" class="research-trigger">
+              <button class="secondary" type="button" :disabled="researchRunning" @click="runLeadResearch">
+                {{ researchRunning ? "正在联网检索企业信息…" : "手动搜索企业信息" }}
+              </button>
+            </div>
           </section>
 
           <section class="detail-block">
@@ -605,11 +634,14 @@ onBeforeUnmount(clearReportPolling);
             <Sparkles :size="16" /> AI 原生企业转型诊断报告
           </p>
           <h1 class="hero-title">{{ reportTitle }}</h1>
-          <div class="hero-meta">
-            <span>报告编号  {{ publicReport.public_token.slice(0, 8).toUpperCase() }}</span>
-            <span class="meta-divider"></span>
-            <span>{{ formatDate(publicReport.created_at) }}</span>
-          </div>
+            <div class="hero-meta">
+              <span>报告编号  {{ publicReport.public_token.slice(0, 8).toUpperCase() }}</span>
+              <span class="meta-divider"></span>
+              <span>{{ formatDate(publicReport.created_at) }}</span>
+            </div>
+            <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
+              {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
+            </button>
         </div>
       </header>
 
@@ -669,7 +701,7 @@ onBeforeUnmount(clearReportPolling);
 
       <div v-if="step === 'intro'" class="intro-grid">
         <div class="intro-copy">
-          <p>完成企业信息与 68 题量表后，系统会生成结构化诊断报告，包含总分等级、短板维度、优先 AI 场景和下一步咨询建议。</p>
+          <p>完成企业信息与当前诊断题库后，系统会生成结构化诊断报告，包含核心发现、能力画像、题项排序和下一步咨询建议。</p>
           <button class="primary" @click="begin"><FileText :size="18" /> 开始自测</button>
         </div>
         <div class="signal-map" aria-hidden="true">
@@ -783,6 +815,14 @@ onBeforeUnmount(clearReportPolling);
         <h2>正在生成您的诊断报告</h2>
         <p>报告完成后会自动为您打开，同时发送至：</p>
         <strong>{{ leadForm.email }}</strong>
+        <div v-if="deliveryStatus === 'queued' && queuePosition" class="queue-status">
+          <span class="queue-dot" aria-hidden="true"></span>
+          已进入生成队列，当前排在第 {{ queuePosition }} 位
+        </div>
+        <div v-else-if="deliveryStatus === 'processing'" class="queue-status">
+          <span class="queue-dot" aria-hidden="true"></span>
+          正在联网检索企业信息并生成报告…
+        </div>
         <p v-if="reportWaitSeconds < 20" class="submitted-note">正在进行 AI 分析，请保持当前页面开启。</p>
         <p v-else class="submitted-note">当前访问量较高，报告仍会在生成完成后发送至邮箱；您可以稍后通过邮件中的链接查看。</p>
       </section>
@@ -800,6 +840,9 @@ onBeforeUnmount(clearReportPolling);
               <span class="meta-divider"></span>
               <span>{{ formatDate(reportDate) }}</span>
             </div>
+            <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
+              {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
+            </button>
           </div>
         </header>
 
