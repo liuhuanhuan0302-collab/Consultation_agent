@@ -7,6 +7,8 @@
       name="description"
       content="优鲲智能为企业提供 AI 诊断、AI Agent、AI 训战咨询与数智化转型解决方案。"
     />
+    <link rel="icon" type="image/webp" href="/assets/logo-symbol.webp" />
+    <link rel="apple-touch-icon" href="/assets/logo-symbol.webp" />
     <title>优鲲智能 - AI 时代企业智能化升级实战伙伴</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -27,10 +29,10 @@
           <a href="#solutions">解决方案</a>
           <a href="#agent">AI Agent</a>
           <a href="#training">训战咨询</a>
-          <a href="#about">关于优鲲</a>
+          <a href="/founder.html">创始人</a>
         </nav>
         <div class="nav-actions">
-          <a class="nav-phone" href="#about">公司介绍</a>
+          <a class="nav-phone" href="/founder.html">创始人介绍</a>
           <a class="btn btn-light" href="#contact">预约 AI 诊断</a>
         </div>
         <button class="menu-toggle" type="button" aria-label="打开导航菜单" aria-controls="mobilePanel" aria-expanded="false">
@@ -44,7 +46,7 @@
         <a href="#solutions">解决方案</a>
         <a href="#agent">AI Agent</a>
         <a href="#training">训战咨询</a>
-        <a href="#about">关于优鲲</a>
+        <a href="/founder.html">创始人</a>
         <a class="btn btn-primary" href="#contact">预约 AI 诊断</a>
       </div>
     </header>
@@ -280,7 +282,8 @@
               </div>
               <a href="#contact" data-assessment-link aria-label="扫码或点击开始 AI 测评">
                 <img
-                  src="/assets/ai-assessment-qr.png"
+                  src="/api/public/channels/OFFICIAL_WEBSITE/qr"
+                  data-assessment-qr
                   width="496"
                   height="496"
                   loading="lazy"
@@ -364,27 +367,26 @@
         </div>
       </section>
 
-      <section class="section" id="about" data-module="about">
-        <div class="container split-layout about-layout">
-          <div>
+      <section class="section founder-teaser" data-module="about">
+        <div class="container founder-teaser-inner">
+          <div class="founder-teaser-portrait">
             <img
-              class="about-logo"
-              src="/assets/logo-symbol.webp"
-              width="420"
-              height="478"
+              src="/assets/founder/quan-xin-rong.png"
+              alt="优鲲智能创始人全新蓉"
+              width="1121"
+              height="1804"
               loading="lazy"
               decoding="async"
-              alt=""
             />
           </div>
-          <div class="section-heading align-left">
-            <p class="eyebrow">About Us</p>
-            <h2>优鲲智能，让 AI 加速每个企业增长</h2>
-            <p data-field="company.profile">
-              优鲲智能聚焦 AI 技术驱动的数智化转型与管理咨询，为企业提供
-              “AI 战略突围 - 组织能力升级 - 智能运营提效”的全链路解决方案。
+          <div class="founder-teaser-copy">
+            <p class="eyebrow">About The Founder</p>
+            <h2>全新蓉 · 优鲲智能创始人</h2>
+            <p>
+              15 年组织发展与人才发展经验。她把组织变革、引导技术与 AI 应用结合，
+              帮助企业从一个高价值场景出发，让 AI 真正进入业务现场，转化为可持续的经营与组织能力。
             </p>
-            <p class="about-mission" data-field="company.mission">让 AI 放大每家企业的核心能力</p>
+            <a class="btn btn-primary" href="/founder.html">查看创始人完整介绍</a>
           </div>
         </div>
       </section>
@@ -431,10 +433,131 @@
         <div>
           <strong>联系我们</strong>
           <a href="#contact">预约诊断</a>
-          <a href="#about">关于优鲲</a>
+          <a href="/founder.html">创始人介绍</a>
         </div>
       </div>
     </footer>
+
+    <section
+      class="founder-letter-modal"
+      data-founder-letter
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="founderLetterTitle"
+      aria-hidden="true"
+      hidden
+    >
+      <div class="founder-letter-backdrop"></div>
+      <div class="founder-letter-dialog" role="document">
+        <button class="founder-letter-close" type="button" aria-label="关闭创始人来信" data-founder-letter-close>
+          <span aria-hidden="true">×</span>
+        </button>
+        <article class="founder-letter-paper" data-founder-letter-paper>
+          <img
+            class="founder-letter-logo"
+            src="/assets/logo-symbol.webp"
+            alt="优鲲智能"
+            width="420"
+            height="478"
+            decoding="async"
+          />
+          <p class="founder-letter-kicker">来自优鲲智能的一封信</p>
+          <h2 id="founderLetterTitle">从引导组织能量，到推动企业 AI 真正落地</h2>
+          <p class="founder-letter-lead">我的第二次创业</p>
+          <p>这一次，我想做的不只是一家公司。</p>
+          <p>我更想找到一群同行者，一起帮助传统企业跨过 AI 落地最困难的那道门槛。</p>
+          <p>这篇自述有些长。</p>
+          <p>如果你也关心 AI 将怎样改变企业、组织和人的未来，邀请你读到最后。</p>
+
+          <section class="founder-letter-section">
+            <h3>1.0 第一曲线：当企业都在为生存焦虑，组织能量还有价值吗？</h3>
+            <p>我毕业于中山大学，有阿里大厂背景，做了 18 年 HR 和组织发展。</p>
+            <p>第一次创业，我选择了自己最相信的一件事：用引导技术激活组织能量。</p>
+            <p>这些年，我和团队将引导技术带进了超过 500 家大企业。</p>
+            <p>我们帮助管理团队做战略共创、业务复盘、组织变革，也亲眼看见一场高质量的工作坊，怎样让一群人从彼此对立走向真正共识，让士气低落的团队重新找到方向和力量。</p>
+            <p>我曾经非常坚定地相信，这就是我愿意长期投入的事业。</p>
+            <p>但这几年，我听见老板们越来越多地谈论另一类问题：</p>
+            <p>订单在哪里？成本还能不能降？增长从哪里来？企业怎样才能活下去？</p>
+            <p>当老板正在为企业生存焦虑时，他可能根本没有精力关心团队是否有活力、组织是否有能量。</p>
+            <p>马斯洛需求最基础的一层都还没有满足，我们却在谈组织激活和自我实现，会不会曲高和寡？</p>
+            <p>我第一次开始怀疑：</p>
+            <p>如果组织发展不能帮助企业解决生存和经营问题，我一直相信的事业，是否还有足够的价值？</p>
+          </section>
+
+          <section class="founder-letter-section">
+            <h3>2.0 新的起点：AI 让我看见技术平权</h3>
+            <p>就在我反复追问这个问题的时候，我遇见了钉钉前 CTO 巴布老师。</p>
+            <p>他让我重新认识了 AI。</p>
+            <p>过去，先进技术往往掌握在少数科技公司和技术专家手中。普通员工和中小企业，很难以合理成本获得真正强大的技术能力。</p>
+            <p>但 AI 正在改变这一切。</p>
+            <p>一个普通员工，也可以拥有过去只有专业团队才具备的能力；一家传统企业，也有机会用过去难以想象的成本重构生产力。</p>
+            <p>AI 带来的不只是一轮工具升级，更是一场技术平权。</p>
+            <p>在这条路上，我又遇见了一群各有所长的同行者。</p>
+            <p>阿里前组织发展副总裁唐斌地老师带来了“智简组织”的方法论；钉钉曾经的创始团队武彻、北辰、法善提供扎实的技术支撑；阿里曾经的老战友荆超、微豆长期深入企业，对 AI 落地场景有深刻理解；以及拥有腾讯背景的 AI 产品专家 RAMBO，擅长将客户的痛点转化为产品及解决方案。</p>
+            <p>我们开始思考：</p>
+            <p>能不能把优秀员工长期积累的经验萃取出来，变成企业可复用的知识资产？</p>
+            <p>能不能让 AI 承担重复劳动，让人从低价值工作中解放出来，去做更有判断、更有创造力的事情？</p>
+            <p>我隐约感觉到，自己的第二条创业曲线出现了。</p>
+          </section>
+
+          <section class="founder-letter-section">
+            <h3>3.0 泥土中生发梦想：AI 落地不是技术题，而是组织变革题</h3>
+            <p>真正进入企业现场后，我发现，AI 落地从来不只是一道技术题。</p>
+            <p>企业买了很多 AI 工具，不代表生产力真的发生了改变。</p>
+            <p>做完一场培训，不代表员工回到岗位后就会使用；完成一份咨询方案，不代表组织能够跨过落地的最后一公里；交付一个技术系统，也不代表它能进入业务流程，被团队长期使用。</p>
+            <p>任何单一力量，都很难独立完成企业 AI 落地。</p>
+            <p>因为 AI 一旦进入企业，就会触碰原有的流程、岗位、权责和利益分配。</p>
+            <p>它要求企业重新梳理流程，打破部门边界；也要求管理者面对组织阻力，帮助员工跨越对 AI 的恐惧和抵抗。</p>
+            <p>它既需要 AI 技术和 FDE 团队深入业务现场，也需要组织变革、人才发展和机制设计同步发生。</p>
+            <p>这正好把我过去 18 年积累的组织发展能力，与 AI 技术团队的能力连接了起来。</p>
+            <p>我们开始一起进入真实战场：</p>
+            <p>找场景、改流程、做应用、带人才、破阻力，并用真实经营数据验收结果。</p>
+            <p>在这些项目中，我们陆续帮助企业实现了百万级的降本增效。</p>
+            <p>那一刻我终于明白：</p>
+            <p>技术是新的生产力，组织是让生产力真正发生的土壤。</p>
+            <p>真正的 AI 组织转型，既需要组织变革能力，也需要 AI 技术 FDE 团队的长期陪伴。</p>
+          </section>
+
+          <section class="founder-letter-section">
+            <h3>4.0 带着成果踏上征途：找到企业 AI 落地的“一鱼三吃”</h3>
+            <p>为了找到一条适合传统企业的 AI 落地路径，我们调研了超过 300 家企业。</p>
+            <p>我们发现，很多企业不是没有 AI 意识，而是不知道：</p>
+            <p>第一个场景应该选在哪里？</p>
+            <p>怎样在短时间内做出可量化的结果？</p>
+            <p>项目结束后，能力和资产怎样留在企业？</p>
+            <p>基于这些真实问题，我们最终形成了“企业 AI 百万结果营”这个产品。</p>
+            <p>它不是一场培训，也不只是一次技术交付，而是陪伴企业打一场真实的 AI 速赢战役。</p>
+            <p>我们希望通过一个高价值业务场景，实现“一鱼三吃”：</p>
+            <p>第一，拿到真实的降本增效结果；</p>
+            <p>第二，培养企业自己的 AI 种子人才；</p>
+            <p>第三，沉淀可持续复用的 Skill、知识库、Agent 和业务工作流。</p>
+            <p>项目结束后，企业带走的不只是一个结果，而是一支队伍、一套方法和一批可以持续生长的 AI 资产。</p>
+            <p>我们越来越相信：</p>
+            <p>传统企业的 AI 转型，不需要一开始就做庞大的系统工程。</p>
+            <p>找到一个高价值场景，打赢第一场速赢战役，才是最重要的破局点。</p>
+          </section>
+
+          <section class="founder-letter-section">
+            <h3>5.0 星星之火，共同燎原</h3>
+            <p>我的第一次创业，是希望让更多人掌握引导技术，成为组织变革的推动者。</p>
+            <p>我的第二次创业，是希望让组织发展与 AI 技术真正结合，帮助更多传统企业把 AI 变成经营结果。</p>
+            <p>但这个愿望，靠一家公司、一个团队无法完成。</p>
+            <p>它需要企业家愿意开放真实的业务战场，需要业务负责人提出真正有价值的问题，需要 HR 和 OD 推动组织改变，需要 AI 专家提供技术能力，也需要更多愿意连接、推荐和成就他人的同行者。</p>
+            <p>如果你是一位企业经营者，也许你可以和我们一起找到第一个值得突破的 AI 场景。</p>
+            <p>如果你是一位 HR、OD 或管理者，也许你可以成为组织里的 AI 变革推动者。</p>
+            <p>如果你是一位 CTO、AI 技术专家、顾问或培训师，也许我们可以把彼此的能力组合起来，真正走完企业 AI 落地的最后一公里。</p>
+            <p>如果你身边有一家正在寻找 AI 突破口的企业，你的一次连接，也许就能帮助它少走很多弯路。</p>
+            <p>我相信，每个人内心都有成就他人的愿望。</p>
+            <p>这一次，你不只是来旁观我的第二次创业，也不只是来支持一个新产品。</p>
+            <p>我们可以一起帮助一家传统企业打赢它的第一场 AI 战役，帮助一群普通员工获得面向未来的新能力，也帮助更多组织从传统组织走向真正的 AI 原生组织。</p>
+          </section>
+          <div class="founder-letter-actions">
+            <a class="btn btn-primary" href="/" data-founder-letter-action>进入官网</a>
+          </div>
+          <p class="founder-letter-signature">优鲲智能创始团队</p>
+        </article>
+      </div>
+    </section>
 
     <script type="module" src="/main.js"></script>
     <script type="module" src="/components/ai-assessment-section.js"></script>

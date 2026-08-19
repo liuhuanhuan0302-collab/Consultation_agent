@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import {
   ArrowLeft,
   ArrowDownToLine,
@@ -17,8 +17,9 @@ import {
   Trash2
 } from "lucide-vue-next";
 import ReportCharts from "./components/ReportCharts.vue";
+import { api } from "./api";
 import { adminNotice, error } from "./composables/feedback";
-import { useAdmin } from "./composables/useAdmin";
+import { useAdmin, companyResearchSections, searchProviderOfficialUrls } from "./composables/useAdmin";
 import { useQuestionnaire } from "./composables/useQuestionnaire";
 import { useReportView } from "./composables/useReportView";
 import { isAdmin, reportToken } from "./utils/appPaths";
@@ -34,6 +35,8 @@ const {
   busy,
   draftSaved,
   reportWaitSeconds,
+  deliveryStatus,
+  queuePosition,
   missingNoticeVisible,
   missingNoticeMessage,
   leadForm,
@@ -81,6 +84,25 @@ const {
   loadPublicReport,
 } = useReportView(score, report);
 
+const isLocalReportTesting = import.meta.env.DEV && ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+const regeneratingReport = ref(false);
+
+async function regenerateTestReport() {
+  const token = activeReport.value?.public_token;
+  if (!token || regeneratingReport.value) return;
+  regeneratingReport.value = true;
+  error.value = "";
+  try {
+    const regenerated = await api.regenerateReportForTesting(token);
+    if (publicReport.value) publicReport.value = regenerated;
+    if (report.value) report.value = regenerated;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : "重新生成报告失败";
+  } finally {
+    regeneratingReport.value = false;
+  }
+}
+
 const {
   adminToken,
   adminUser,
@@ -98,6 +120,7 @@ const {
   leadDetailOpen,
   leadDetailLoading,
   selectedLeadDetail,
+  researchRunning,
   diagnosticEmailDraft,
   diagnosticEmailUpdating,
   adminQuestions,
@@ -113,8 +136,19 @@ const {
   leadWordExporting,
   questionModuleForm,
   questionForm,
+  gatewayConfig,
+  searchForm,
+  llmForm,
+  searchSaving,
+  searchTesting,
+  llmSaving,
+  llmTesting,
+  searchTestResult,
+  llmTestResult,
   canExportLeads,
+  canDeleteLeads,
   canManageQuestionBank,
+  canManageGateway,
   leadIndustryOptions,
   sourceLabel,
   filteredLeads,
@@ -130,9 +164,11 @@ const {
   goLeadPage,
   openLeadDetail,
   closeLeadDetail,
+  runLeadResearch,
   updateLeadDiagnosticEmail,
   exportLeads,
   exportLeadWord,
+  deleteLead,
   logoutAdmin,
   createCase,
   createChannel,
@@ -144,6 +180,10 @@ const {
   createQuestion,
   deleteQuestionModule,
   deleteQuestion,
+  saveSearchConfig,
+  saveLlmConfig,
+  testSearchConfig,
+  testLlmConfig,
 } = useAdmin();
 
 onMounted(async () => {
@@ -300,7 +340,7 @@ onBeforeUnmount(clearReportPolling);
         </div>
         <div class="leads-table-wrap">
           <table class="leads-table">
-            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>最近处理时间</th></tr></thead>
+            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>最近处理时间</th><th v-if="canDeleteLeads">操作</th></tr></thead>
             <tbody>
               <tr v-for="lead in pagedLeads" :key="lead.id" class="clickable-row" tabindex="0" @click="openLeadDetail(lead)" @keydown.enter="openLeadDetail(lead)">
                 <td :title="lead.company_name || ''">{{ lead.company_name }}</td>
@@ -310,9 +350,12 @@ onBeforeUnmount(clearReportPolling);
                 <td :title="lead.phone || lead.wechat || ''">{{ lead.phone || lead.wechat }}</td>
                 <td><span class="pill" :class="lead.lead_level">{{ lead.lead_level }}</span></td>
                 <td>{{ formatDateTime(lead.last_activity_at || lead.updated_at || lead.created_at) }}</td>
+                <td v-if="canDeleteLeads" class="lead-row-actions">
+                  <button class="icon-button danger-icon-button" type="button" :title="`删除线索：${lead.company_name || lead.id}`" @click.stop="deleteLead(lead)"><Trash2 :size="16" /></button>
+                </td>
               </tr>
               <tr v-if="!pagedLeads.length">
-                <td colspan="7" class="empty-cell">暂无符合条件的线索</td>
+                <td :colspan="canDeleteLeads ? 8 : 7" class="empty-cell">暂无符合条件的线索</td>
               </tr>
             </tbody>
           </table>
@@ -334,6 +377,12 @@ onBeforeUnmount(clearReportPolling);
             <h2 id="lead-detail-title">{{ selectedLeadDetail?.lead.company_name || "客户详情" }}</h2>
           </div>
           <div class="lead-detail-actions">
+            <button
+              v-if="selectedLeadDetail && canDeleteLeads"
+              class="danger-text-button"
+              type="button"
+              @click="deleteLead(selectedLeadDetail.lead)"
+            ><Trash2 :size="16" /> 删除该线索</button>
             <button
               v-if="selectedLeadDetail && canExportLeads"
               class="primary"
@@ -399,6 +448,39 @@ onBeforeUnmount(clearReportPolling);
           </section>
 
           <section class="detail-block">
+            <h3>企业情报与 AI 分析</h3>
+            <div v-if="selectedLeadDetail.report?.company_research" class="company-research-view">
+              <div class="company-research-sections">
+                <div v-for="[key, label] in companyResearchSections" :key="key" class="company-research-item">
+                  <span>{{ label }}</span>
+                  <p>{{ selectedLeadDetail.report.company_research[key] || "公开渠道未披露" }}</p>
+                </div>
+              </div>
+              <div class="detail-demand">
+                <span>AI 综合分析</span>
+                <p>{{ selectedLeadDetail.report.company_research.analysis || "暂无" }}</p>
+              </div>
+              <div v-if="selectedLeadDetail.report.company_research.sources?.length" class="company-research-sources">
+                <span>信息来源</span>
+                <ul>
+                  <li v-for="(source, index) in selectedLeadDetail.report.company_research.sources" :key="index">
+                    <a :href="source.url" target="_blank" rel="noopener noreferrer">{{ source.title || source.url }}</a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <p v-else class="empty-detail">尚未生成企业情报（需在 API 配置中启用联网搜索）。</p>
+            <div v-if="selectedLeadDetail.report?.generation_error" class="generation-error-banner">
+              <strong>生成提示：</strong>{{ selectedLeadDetail.report.generation_error }}
+            </div>
+            <div v-if="!selectedLeadDetail.report?.company_research" class="research-trigger">
+              <button class="secondary" type="button" :disabled="researchRunning" @click="runLeadResearch">
+                {{ researchRunning ? "正在联网检索企业信息…" : "手动搜索企业信息" }}
+              </button>
+            </div>
+          </section>
+
+          <section class="detail-block">
             <h3>AI 分析报告</h3>
             <div v-if="selectedLeadDetail.report?.html_content" class="detail-report-html" v-html="leadDetailReportHtml"></div>
             <p v-else class="empty-detail">报告还未生成或暂无内容。</p>
@@ -427,6 +509,64 @@ onBeforeUnmount(clearReportPolling);
             <p>{{ question.code }} · {{ question.text }}</p>
             <button v-if="canManageQuestionBank" class="icon-button danger-icon-button" type="button" :title="`删除题目：${question.code}`" @click="deleteQuestion(question)"><Trash2 :size="16" /></button>
           </div>
+        </section>
+      </div>
+
+      <div v-if="adminTab === 'gateway'" class="gateway-panel">
+        <header class="question-bank-header">
+          <div>
+            <p class="eyebrow">系统配置</p>
+            <h2>API 网关配置</h2>
+          </div>
+        </header>
+        <div v-if="gatewayConfig?.key_reentry_required" class="gateway-key-warning">检测到加密密钥已轮换，已保存的 API Key 无法解密，请重新填写搜索 / LLM Key 并保存。</div>
+
+        <section class="module-block gateway-card">
+          <header class="module-block-header">
+            <h2>搜索配置<span>公司情报检索</span></h2>
+          </header>
+          <p class="gateway-hint">启用后，客户提交问卷时系统会自动检索目标公司的公开信息，生成 7 维情报与 AI 分析。选择 DeepSeek 联网搜索时由 DeepSeek 一步完成检索与情报生成（需填入 DeepSeek API Key）。API Key 以掩码显示，输入框留空表示保留原值；切换服务商或使用自定义服务商时必须填写新的 Key，不能沿用旧 Key。</p>
+          <label class="gateway-check"><input v-model="searchForm.search_enabled" type="checkbox" /> 启用联网搜索</label>
+          <div class="question-bank-number-grid">
+            <label>搜索服务商
+              <select v-model="searchForm.search_provider">
+                <option value="bocha">博查 Bocha</option>
+                <option value="serpapi">SerpAPI</option>
+                <option value="deepseek">DeepSeek 联网搜索</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label v-if="searchForm.search_provider === 'custom'">接口地址<input v-model="searchForm.search_base_url" placeholder="https:// 公网地址（必填）" /></label>
+            <p v-else class="gateway-hint gateway-official-url">接口地址：{{ searchProviderOfficialUrls[searchForm.search_provider] }}（官方固定，不可修改）</p>
+          </div>
+          <label v-if="searchForm.search_provider === 'deepseek'">检索模型<input v-model="searchForm.search_model" placeholder="留空使用默认 deepseek-v4-flash" /></label>
+          <label>搜索 API Key<input v-model="searchForm.search_api_key" type="password" :placeholder="gatewayConfig?.search_api_key ? `当前：${gatewayConfig.search_api_key}` : '请输入 API Key'" /></label>
+          <div class="question-bank-number-grid">
+            <label>超时（秒）<input v-model.number="searchForm.search_timeout_seconds" type="number" min="3" max="120" /></label>
+            <label>最大结果数<input v-model.number="searchForm.search_max_results" type="number" min="1" max="50" /></label>
+          </div>
+          <div class="gateway-actions">
+            <button class="secondary" type="button" :disabled="searchTesting" @click="testSearchConfig">{{ searchTesting ? "测试中..." : "测试搜索接口" }}</button>
+            <button class="primary" type="button" :disabled="searchSaving || !canManageGateway" @click="saveSearchConfig">{{ searchSaving ? "保存中..." : "保存搜索配置" }}</button>
+          </div>
+          <p v-if="searchTestResult" class="gateway-test-result" :class="searchTestResult.ok ? 'gateway-test-ok' : 'gateway-test-fail'">{{ searchTestResult.text }}</p>
+        </section>
+
+        <section class="module-block gateway-card">
+          <header class="module-block-header">
+            <h2>大模型配置<span>可选</span></h2>
+          </header>
+          <p class="gateway-hint">用于报告生成与公司情报分析的大模型。全部留空则使用服务器 .env 中的 DeepSeek 配置。接口地址仅支持 DeepSeek 官方域名（https://api.deepseek.com）或通过安全校验的公网 https 服务，且更换地址时必须同时填写新的 LLM Key（系统会自动拼接 /v1/chat/completions）。</p>
+          <label>接口地址<input v-model="llmForm.llm_base_url" placeholder="如 https://api.deepseek.com" /></label>
+          <div class="question-bank-number-grid">
+            <label>LLM API Key<input v-model="llmForm.llm_api_key" type="password" :placeholder="gatewayConfig?.llm_api_key ? `当前：${gatewayConfig.llm_api_key}` : '留空使用 .env'" /></label>
+            <label>模型名称<input v-model="llmForm.llm_model" placeholder="如 deepseek-chat" /></label>
+          </div>
+          <div class="gateway-actions">
+            <button class="secondary" type="button" :disabled="llmTesting" @click="testLlmConfig">{{ llmTesting ? "测试中..." : "测试大模型" }}</button>
+            <button class="primary" type="button" :disabled="llmSaving || !canManageGateway" @click="saveLlmConfig">{{ llmSaving ? "保存中..." : "保存大模型配置" }}</button>
+          </div>
+          <p v-if="llmTestResult" class="gateway-test-result" :class="llmTestResult.ok ? 'gateway-test-ok' : 'gateway-test-fail'">{{ llmTestResult.text }}</p>
         </section>
       </div>
 
@@ -508,11 +648,14 @@ onBeforeUnmount(clearReportPolling);
             <Sparkles :size="16" /> AI 原生企业转型诊断报告
           </p>
           <h1 class="hero-title">{{ reportTitle }}</h1>
-          <div class="hero-meta">
-            <span>报告编号  {{ publicReport.public_token.slice(0, 8).toUpperCase() }}</span>
-            <span class="meta-divider"></span>
-            <span>{{ formatDate(publicReport.created_at) }}</span>
-          </div>
+            <div class="hero-meta">
+              <span>报告编号  {{ publicReport.public_token.slice(0, 8).toUpperCase() }}</span>
+              <span class="meta-divider"></span>
+              <span>{{ formatDate(publicReport.created_at) }}</span>
+            </div>
+            <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
+              {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
+            </button>
         </div>
       </header>
 
@@ -572,7 +715,7 @@ onBeforeUnmount(clearReportPolling);
 
       <div v-if="step === 'intro'" class="intro-grid">
         <div class="intro-copy">
-          <p>完成企业信息与 68 题量表后，系统会生成结构化诊断报告，包含总分等级、短板维度、优先 AI 场景和下一步咨询建议。</p>
+          <p>完成企业信息与当前诊断题库后，系统会生成结构化诊断报告，包含核心发现、能力画像、题项排序和下一步咨询建议。</p>
           <button class="primary" @click="begin"><FileText :size="18" /> 开始自测</button>
         </div>
         <div class="signal-map" aria-hidden="true">
@@ -686,6 +829,14 @@ onBeforeUnmount(clearReportPolling);
         <h2>正在生成您的诊断报告</h2>
         <p>报告完成后会自动为您打开，同时发送至：</p>
         <strong>{{ leadForm.email }}</strong>
+        <div v-if="deliveryStatus === 'queued' && queuePosition" class="queue-status">
+          <span class="queue-dot" aria-hidden="true"></span>
+          已进入生成队列，当前排在第 {{ queuePosition }} 位
+        </div>
+        <div v-else-if="deliveryStatus === 'processing'" class="queue-status">
+          <span class="queue-dot" aria-hidden="true"></span>
+          正在联网检索企业信息并生成报告…
+        </div>
         <p v-if="reportWaitSeconds < 20" class="submitted-note">正在进行 AI 分析，请保持当前页面开启。</p>
         <p v-else class="submitted-note">当前访问量较高，报告仍会在生成完成后发送至邮箱；您可以稍后通过邮件中的链接查看。</p>
       </section>
@@ -703,6 +854,9 @@ onBeforeUnmount(clearReportPolling);
               <span class="meta-divider"></span>
               <span>{{ formatDate(reportDate) }}</span>
             </div>
+            <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
+              {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
+            </button>
           </div>
         </header>
 

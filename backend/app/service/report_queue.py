@@ -7,9 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus
+from app.service.company_research import research_company
 from app.service.email_service import send_report_pdf_email
 from app.service.pdf_service import render_report_html_attachment, render_report_pdf_bytes, report_public_url
 from app.service.reporting import generate_report_content, report_generation_semaphore
+from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -
     )
     if existing:
         existing.recipient_email = normalized_email
-        existing.run_after = datetime.utcnow()
+        existing.run_after = utc_now()
         return existing
 
     # processing 中的任务已不在候选之列：worker 读取收件人发生在领取之后，
@@ -46,7 +48,7 @@ def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -
         report_id=report.id,
         recipient_email=normalized_email,
         status=ReportDeliveryStatus.queued.value,
-        run_after=datetime.utcnow(),
+        run_after=utc_now(),
     )
     db.add(job)
     db.flush()
@@ -60,7 +62,7 @@ def claim_next_job(db: Session) -> ReportDeliveryJob | None:
     并发调用时只有一个能拿到 rowcount=1，避免同一任务被重复生成报告、
     重复发送邮件。
     """
-    now = datetime.utcnow()
+    now = utc_now()
     stale_before = now - STALE_PROCESSING_TIMEOUT
 
     stale_jobs = (
@@ -86,19 +88,22 @@ def claim_next_job(db: Session) -> ReportDeliveryJob | None:
         logger.warning("回收了 %s 条超时的报告发送任务", len(stale_jobs))
         db.commit()
 
-    candidate_id = (
-        db.query(ReportDeliveryJob.id)
-        .filter(
-            ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
-            ReportDeliveryJob.run_after <= now,
-            ReportDeliveryJob.attempts < ReportDeliveryJob.max_attempts,
+    while True:
+        candidate_id = (
+            db.query(ReportDeliveryJob.id)
+            .filter(
+                ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
+                ReportDeliveryJob.run_after <= now,
+                ReportDeliveryJob.attempts < ReportDeliveryJob.max_attempts,
+            )
+            .order_by(ReportDeliveryJob.created_at.asc())
+            .limit(1)
+            .scalar()
         )
-        .order_by(ReportDeliveryJob.created_at.asc())
-        .scalar()
-    )
-    if not candidate_id or not _try_claim_job(db, candidate_id, now):
-        return None
-    return db.get(ReportDeliveryJob, candidate_id)
+        if not candidate_id:
+            return None
+        if _try_claim_job(db, candidate_id, now):
+            return db.get(ReportDeliveryJob, candidate_id)
 
 
 def _try_claim_job(db: Session, job_id: int, now: datetime) -> bool:
@@ -137,25 +142,37 @@ async def process_report_delivery_job(job_id: int) -> bool:
             report.status = ReportStatus.generating.value
             db.commit()
             db.refresh(report)
+            await research_company(db, report)  # 联网情报检索，失败静默降级
             async with report_generation_semaphore():
                 await generate_report_content(db, report)
+            # 报告生成与邮件投递是两个独立结果。先固化报告，避免 SMTP/PDF
+            # 失败时异常回滚掉已生成内容，导致客户永久停留在“生成中”。
+            db.commit()
+            db.refresh(report)
         pdf = await render_report_pdf_bytes(report)
         html = render_report_html_attachment(report)
         report_url = report_public_url(report)
-        send_report_pdf_email(
-            job.recipient_email,
-            report.title,
-            pdf,
-            f"diagnosis-report-{report.public_token}.pdf",
-            report_url=report_url,
-            html_bytes=html,
-            html_filename=f"diagnosis-report-{report.public_token}.html",
-        )
+        email_error: str | None = None
+        try:
+            send_report_pdf_email(
+                job.recipient_email,
+                report.title,
+                pdf,
+                f"diagnosis-report-{report.public_token}.pdf",
+                report_url=report_url,
+                html_bytes=html,
+                html_filename=f"diagnosis-report-{report.public_token}.html",
+            )
+        except Exception as exc:  # noqa: BLE001
+            # 邮件失败不阻塞队列：报告（含企业情报）已生成完成，任务视为完成，
+            # 错误单独记录到 last_error 供后台排查；后续可单独补发邮件。
+            logger.warning("报告已生成但邮件发送失败 job_id=%s: %s", job_id, exc)
+            email_error = f"邮件发送失败：{exc}"
 
         job.status = ReportDeliveryStatus.sent.value
-        job.sent_at = datetime.utcnow()
+        job.sent_at = utc_now()
         job.locked_at = None
-        job.last_error = None
+        job.last_error = email_error
         db.commit()
         return True
     except Exception as exc:
@@ -168,7 +185,7 @@ async def process_report_delivery_job(job_id: int) -> bool:
                 job.status = ReportDeliveryStatus.failed.value
             else:
                 job.status = ReportDeliveryStatus.queued.value
-                job.run_after = datetime.utcnow() + timedelta(minutes=2 * job.attempts)
+                job.run_after = utc_now() + timedelta(minutes=2 * job.attempts)
             job.locked_at = None
             db.commit()
         return False

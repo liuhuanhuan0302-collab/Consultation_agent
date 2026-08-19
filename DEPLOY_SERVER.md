@@ -212,7 +212,7 @@ CORS_ORIGINS=https://你的域名
 docker compose up -d
 ```
 
-旧二维码不会自动变，需要重新生成。
+官网二维码通过 `/api/public/channels/OFFICIAL_WEBSITE/qr` 实时生成；完成上述配置并重建前端容器后，会自动使用新的地址，无需替换静态图片。
 
 ## 8. 重要提醒
 

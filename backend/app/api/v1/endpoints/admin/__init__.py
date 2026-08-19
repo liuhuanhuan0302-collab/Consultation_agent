@@ -2,10 +2,10 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints.admin import analytics, auth, cases, channels, leads, questions, reports, users
+from app.api.v1.endpoints.admin import analytics, api_gateway, auth, cases, channels, leads, questions, reports, users
 
 router = APIRouter()
-for submodule in (auth, users, leads, reports, questions, cases, channels, analytics):
+for submodule in (auth, users, leads, reports, questions, cases, channels, analytics, api_gateway):
     router.include_router(submodule.router)
 
 # 兼容既有导入路径（如 backend/tests 中的 from app.api.v1.endpoints.admin import xxx）

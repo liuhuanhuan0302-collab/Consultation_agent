@@ -1,16 +1,33 @@
 /** 后台管理 — 登录态、统计看板、线索、题库、案例、账号与渠道。 */
 
 import { computed, reactive, ref, watch, type Component } from "vue";
-import { BookOpen, BriefcaseBusiness, FileText, LayoutDashboard, QrCode, Users } from "lucide-vue-next";
+import { BookOpen, BriefcaseBusiness, FileText, KeyRound, LayoutDashboard, QrCode, Users } from "lucide-vue-next";
 
 import { ApiError, api } from "../api";
-import type { AnalyticsSummary, CaseStudy, ChannelSource, Lead, LeadDetail, Question, QuestionModule, User } from "../types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, User } from "../types";
 import { formatDateTime, isValidEmail, parseApiDate } from "../utils/format";
 import { normalizeReportHtml } from "../utils/reportHtml";
 import { adminNotice, error } from "./feedback";
 
-export type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels";
+export type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels" | "gateway";
 type LeadSortOrder = "newest" | "oldest";
+
+export const companyResearchSections: [keyof CompanyResearch, string][] = [
+  ["company_overview", "公司介绍"],
+  ["revenue_scale", "营收规模"],
+  ["products", "产品"],
+  ["industry_characteristics", "行业特点"],
+  ["development_status", "发展现状"],
+  ["challenges", "可能遇到的挑战"],
+  ["ai_opportunities", "AI 能帮他们做什么"],
+];
+
+/** 内置搜索服务商的官方固定地址（不可自定义）。 */
+export const searchProviderOfficialUrls: Record<string, string> = {
+  bocha: "https://api.bochaai.com/v1",
+  serpapi: "https://serpapi.com",
+  deepseek: "https://api.deepseek.com",
+};
 
 export function useAdmin() {
   const adminToken = ref(false);
@@ -28,6 +45,8 @@ export function useAdmin() {
   const leadDetailOpen = ref(false);
   const leadDetailLoading = ref(false);
   const selectedLeadDetail = ref<LeadDetail | null>(null);
+  const researchRunning = ref(false);
+  let researchPollTimer: number | null = null;
   const diagnosticEmailDraft = ref("");
   const diagnosticEmailUpdating = ref(false);
   const adminQuestions = ref<QuestionModule[]>([]);
@@ -38,6 +57,25 @@ export function useAdmin() {
   const channels = ref<ChannelSource[]>([]);
   const leadsExporting = ref(false);
   const leadWordExporting = ref(false);
+  const gatewayConfig = ref<GatewayConfig | null>(null);
+  const searchSaving = ref(false);
+  const searchTesting = ref(false);
+  const llmSaving = ref(false);
+  const llmTesting = ref(false);
+  const searchForm = reactive({
+    search_enabled: false,
+    search_provider: "bocha" as "bocha" | "serpapi" | "deepseek" | "custom",
+    search_api_key: "",
+    search_base_url: "",
+    search_timeout_seconds: 15,
+    search_max_results: 20,
+    search_model: ""
+  });
+  const llmForm = reactive({
+    llm_api_key: "",
+    llm_base_url: "",
+    llm_model: ""
+  });
 
   const caseForm = reactive({
     title: "",
@@ -64,7 +102,8 @@ export function useAdmin() {
     { key: "questions", label: "题库", icon: BookOpen },
     { key: "cases", label: "案例", icon: FileText },
     { key: "users", label: "账号", icon: Users },
-    { key: "channels", label: "渠道", icon: QrCode }
+    { key: "channels", label: "渠道", icon: QrCode },
+    { key: "gateway", label: "API 配置", icon: KeyRound }
   ];
 
   function clearAdminSession(message = "") {
@@ -126,6 +165,7 @@ export function useAdmin() {
       if (tab === "cases") cases.value = await api.cases();
       if (tab === "users") users.value = await api.users().catch(() => []);
       if (tab === "channels") channels.value = await api.channels().catch(() => []);
+      if (tab === "gateway") await loadGatewayTab();
     } catch (err) {
       if (!handleAdminRequestError(err)) {
         error.value = err instanceof Error ? err.message : "加载后台数据失败";
@@ -161,6 +201,57 @@ export function useAdmin() {
     leadDetailOpen.value = false;
     selectedLeadDetail.value = null;
     diagnosticEmailDraft.value = "";
+    clearResearchPolling();
+    researchRunning.value = false;
+  }
+
+  function clearResearchPolling() {
+    if (researchPollTimer !== null) {
+      window.clearInterval(researchPollTimer);
+      researchPollTimer = null;
+    }
+  }
+
+  async function runLeadResearch() {
+    const detail = selectedLeadDetail.value;
+    if (!detail || researchRunning.value) return;
+    researchRunning.value = true;
+    error.value = "";
+    adminNotice.value = "";
+    try {
+      const result = await api.triggerLeadResearch(detail.lead.id);
+      adminNotice.value = result.message || "已开始检索";
+      if (result.status === "already_generated") {
+        selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
+        researchRunning.value = false;
+        return;
+      }
+      // 后台任务异步执行，轮询刷新直到情报出现或超时（最长 3 分钟）
+      let attempts = 0;
+      researchPollTimer = window.setInterval(async () => {
+        attempts += 1;
+        try {
+          const refreshed = await api.leadDetail(detail.lead.id);
+          selectedLeadDetail.value = refreshed;
+          if (refreshed.report?.company_research || attempts >= 60) {
+            clearResearchPolling();
+            researchRunning.value = false;
+            if (refreshed.report?.company_research) {
+              adminNotice.value = "企业情报与 AI 分析已生成";
+            } else {
+              error.value = "检索未生成结果：可能公司名称过短或公开信息不足，可稍后重试";
+            }
+          }
+        } catch (err) {
+          clearResearchPolling();
+          researchRunning.value = false;
+          error.value = err instanceof Error ? err.message : "刷新检索结果失败";
+        }
+      }, 3000);
+    } catch (err) {
+      researchRunning.value = false;
+      error.value = err instanceof Error ? err.message : "触发检索失败";
+    }
   }
 
   async function updateLeadDiagnosticEmail() {
@@ -206,11 +297,26 @@ export function useAdmin() {
     error.value = "";
     try {
       await api.leadWordExport(detail.lead.id);
-      adminNotice.value = "客户档案已导出";
     } catch (err) {
       error.value = err instanceof Error ? err.message : "导出客户档案失败";
     } finally {
       leadWordExporting.value = false;
+    }
+  }
+
+  async function deleteLead(lead: Lead | { id: number; company_name?: string | null }) {
+    const name = "company_name" in lead && lead.company_name ? `「${lead.company_name}」` : `#${lead.id}`;
+    if (!window.confirm(`确定删除线索 ${name} 吗？\n将同时删除该客户的企业信息、全部答题、评分与诊断报告，且无法恢复。删除后该客户可重新填写。`)) return;
+    const leadId = lead.id;
+    const wasDetailOpen = selectedLeadDetail.value?.lead.id === leadId;
+    error.value = "";
+    try {
+      const result = await api.deleteLead(leadId);
+      adminNotice.value = result.message;
+      if (wasDetailOpen) closeLeadDetail();
+      await loadAdminTab("leads");
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "删除线索失败";
     }
   }
 
@@ -387,8 +493,181 @@ export function useAdmin() {
     }
   }
 
+  async function loadGatewayTab() {
+    gatewayConfig.value = await api.gatewayConfig();
+    hydrateGatewayForm();
+  }
+
+  function hydrateGatewayForm() {
+    const config = gatewayConfig.value;
+    if (!config) return;
+    searchForm.search_enabled = config.search_enabled;
+    searchForm.search_provider = config.search_provider;
+    searchForm.search_base_url = config.search_base_url || "";
+    searchForm.search_timeout_seconds = config.search_timeout_seconds;
+    searchForm.search_max_results = config.search_max_results;
+    searchForm.search_model = config.search_model || "";
+    llmForm.llm_base_url = config.llm_base_url || "";
+    llmForm.llm_model = config.llm_model || "";
+    // key 掩码不回填，留空提交即保留原值
+    searchForm.search_api_key = "";
+    llmForm.llm_api_key = "";
+  }
+
+  const searchTestResult = ref<{ ok: boolean; text: string } | null>(null);
+  const llmTestResult = ref<{ ok: boolean; text: string } | null>(null);
+
+  async function saveSearchConfig() {
+    const formKey = searchForm.search_api_key.trim();
+    const savedProvider = gatewayConfig.value?.search_provider;
+    const providerChanged = Boolean(savedProvider && savedProvider !== searchForm.search_provider);
+
+    // 与后端一致的本地预检，避免发出必然失败的请求
+    if ((providerChanged || searchForm.search_provider === "custom") && !formKey) {
+      error.value = providerChanged ? "切换搜索服务商时必须填写新的搜索 API Key（不能沿用旧 Key）" : "自定义服务商必须填写新的搜索 API Key（不能沿用旧 Key）";
+      return;
+    }
+    const baseUrl = searchForm.search_base_url.trim();
+    if (searchForm.search_provider === "custom" && (!baseUrl || !baseUrl.startsWith("https://"))) {
+      error.value = "自定义服务商必须填写 https:// 开头的接口地址";
+      return;
+    }
+    if (searchForm.search_enabled && !formKey && !gatewayConfig.value?.search_api_key) {
+      error.value = "已启用联网搜索，请先填写搜索 API Key";
+      return;
+    }
+
+    searchSaving.value = true;
+    error.value = "";
+    try {
+      gatewayConfig.value = await api.saveSearchConfig({ ...searchForm });
+      hydrateGatewayForm();
+      adminNotice.value = "搜索配置已保存";
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存搜索配置失败";
+    } finally {
+      searchSaving.value = false;
+    }
+  }
+
+  async function saveLlmConfig() {
+    const llmBase = llmForm.llm_base_url.trim();
+    const savedLlmBase = gatewayConfig.value?.llm_base_url || "";
+    const llmBaseChanged = llmBase !== savedLlmBase;
+
+    if (llmBase && !llmBase.startsWith("https://")) {
+      error.value = "LLM 接口地址必须以 https:// 开头";
+      return;
+    }
+    if (llmBaseChanged && !llmForm.llm_api_key.trim()) {
+      error.value = "更换 LLM 接口地址时必须同时填写新的 LLM API Key（不能沿用旧 Key）";
+      return;
+    }
+
+    llmSaving.value = true;
+    error.value = "";
+    try {
+      gatewayConfig.value = await api.saveLlmConfig({ ...llmForm });
+      hydrateGatewayForm();
+      adminNotice.value = "大模型配置已保存";
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : "保存大模型配置失败";
+    } finally {
+      llmSaving.value = false;
+    }
+  }
+
+  async function testSearchConfig() {
+    const query = (leads.value[0]?.company_name || "测试公司").trim();
+    const formKey = searchForm.search_api_key.trim();
+    const savedProvider = gatewayConfig.value?.search_provider;
+    const providerChanged = Boolean(savedProvider && savedProvider !== searchForm.search_provider);
+    const baseUrl = searchForm.search_base_url.trim();
+
+    // 点击前先本地预检，避免把必然失败的请求发到后端
+    if (searchForm.search_provider === "custom") {
+      if (!formKey) {
+        searchTestResult.value = { ok: false, text: "自定义服务商必须填写新的搜索 API Key（不能沿用旧 Key）" };
+        return;
+      }
+      if (!baseUrl || !baseUrl.startsWith("https://")) {
+        searchTestResult.value = { ok: false, text: "自定义服务商需要填写 https:// 开头的接口地址" };
+        return;
+      }
+    } else if (providerChanged && !formKey) {
+      searchTestResult.value = { ok: false, text: "切换搜索服务商时必须填写新的搜索 API Key（不能沿用旧 Key）" };
+      return;
+    } else if (!formKey && !gatewayConfig.value?.search_api_key) {
+      searchTestResult.value = { ok: false, text: "请先填写搜索 API Key（输入框留空时会使用已保存的 Key，当前两者都为空）" };
+      return;
+    }
+
+    searchTesting.value = true;
+    searchTestResult.value = null;
+    error.value = "";
+    try {
+      const result = await api.testSearchConfig(query, {
+        search_provider: searchForm.search_provider,
+        search_api_key: formKey,
+        search_base_url: searchForm.search_provider === "custom" ? baseUrl : null,
+        search_timeout_seconds: searchForm.search_timeout_seconds,
+        search_max_results: searchForm.search_max_results,
+        search_model: searchForm.search_model.trim() || null,
+      });
+      if (result.ok) {
+        searchTestResult.value = {
+          ok: true,
+          text: `连通成功：查询“${query}”返回 ${result.result_count} 条结果（${result.elapsed_ms}ms）${(result.first_results?.length ? `，如“${result.first_results[0]}”` : "")}`,
+        };
+      } else {
+        searchTestResult.value = { ok: false, text: result.error || "搜索接口调用失败" };
+      }
+    } catch (err) {
+      searchTestResult.value = { ok: false, text: err instanceof Error ? err.message : "测试失败" };
+    } finally {
+      searchTesting.value = false;
+    }
+  }
+
+  async function testLlmConfig() {
+    const llmBase = llmForm.llm_base_url.trim();
+    const savedLlmBase = gatewayConfig.value?.llm_base_url || "";
+    const baseChanged = llmBase !== savedLlmBase;
+
+    if (llmBase && !llmBase.startsWith("https://")) {
+      llmTestResult.value = { ok: false, text: "LLM 接口地址必须以 https:// 开头" };
+      return;
+    }
+    if (llmBase && baseChanged && !llmForm.llm_api_key.trim()) {
+      llmTestResult.value = { ok: false, text: "更换 LLM 接口地址时必须同时填写新的 LLM API Key（不能沿用旧 Key）" };
+      return;
+    }
+
+    llmTesting.value = true;
+    llmTestResult.value = null;
+    error.value = "";
+    try {
+      const result = await api.testLlmConfig({
+        llm_api_key: llmForm.llm_api_key.trim(),
+        llm_base_url: llmBase || null,
+        llm_model: llmForm.llm_model.trim() || null,
+      });
+      if (result.ok) {
+        llmTestResult.value = { ok: true, text: `连通成功：${result.model} 回复“${result.reply}”（${result.elapsed_ms}ms）` };
+      } else {
+        llmTestResult.value = { ok: false, text: result.error || "大模型调用失败" };
+      }
+    } catch (err) {
+      llmTestResult.value = { ok: false, text: err instanceof Error ? err.message : "测试失败" };
+    } finally {
+      llmTesting.value = false;
+    }
+  }
+
   const canExportLeads = computed(() => ["admin", "operator", "sales"].includes(adminUser.value?.role || ""));
+  const canDeleteLeads = computed(() => adminUser.value?.role === "admin");
   const canManageQuestionBank = computed(() => ["admin", "operator"].includes(adminUser.value?.role || ""));
+  const canManageGateway = computed(() => adminUser.value?.role === "admin");
   const leadIndustryOptions = computed(() => ["全部行业", ...Array.from(new Set(leads.value.map((lead) => lead.industry || "未填写").filter(Boolean)))]);
 
   function sourceLabel(code: string | null | undefined): string {
@@ -446,6 +725,7 @@ export function useAdmin() {
     leadDetailOpen,
     leadDetailLoading,
     selectedLeadDetail,
+    researchRunning,
     diagnosticEmailDraft,
     diagnosticEmailUpdating,
     adminQuestions,
@@ -461,8 +741,19 @@ export function useAdmin() {
     leadWordExporting,
     questionModuleForm,
     questionForm,
+    gatewayConfig,
+    searchForm,
+    llmForm,
+    searchSaving,
+    searchTesting,
+    llmSaving,
+    llmTesting,
+    searchTestResult,
+    llmTestResult,
     canExportLeads,
+    canDeleteLeads,
     canManageQuestionBank,
+    canManageGateway,
     leadIndustryOptions,
     sourceLabel,
     filteredLeads,
@@ -479,9 +770,11 @@ export function useAdmin() {
     goLeadPage,
     openLeadDetail,
     closeLeadDetail,
+    runLeadResearch,
     updateLeadDiagnosticEmail,
     exportLeads,
     exportLeadWord,
+    deleteLead,
     logoutAdmin,
     createCase,
     createChannel,
@@ -493,5 +786,9 @@ export function useAdmin() {
     createQuestion,
     deleteQuestionModule,
     deleteQuestion,
+    saveSearchConfig,
+    saveLlmConfig,
+    testSearchConfig,
+    testLlmConfig,
   };
 }

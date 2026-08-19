@@ -8,8 +8,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.api.v1.router import api_router
-from app.config import get_settings
-from app.database import get_db, init_db
+from app.core.config import get_settings
+from app.db import get_db, init_db
 from app.seed import seed_initial_data
 from app.utils.exceptions import register_exception_handlers
 

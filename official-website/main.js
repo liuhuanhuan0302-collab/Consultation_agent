@@ -9,6 +9,62 @@ const menuToggle = /** @type {HTMLButtonElement | null} */ (document.querySelect
 const mobilePanel = /** @type {HTMLElement | null} */ (document.querySelector(".mobile-panel"));
 const siteHeader = document.querySelector(".site-header");
 const pageRequestController = new AbortController();
+const founderLetter = /** @type {HTMLElement | null} */ (document.querySelector("[data-founder-letter]"));
+const FOUNDER_LETTER_STORAGE_KEY = "youkun-founder-letter-dismissed";
+let founderLetterLastFocus = /** @type {HTMLElement | null} */ (null);
+
+function hasDismissedFounderLetter() {
+  try {
+    return window.sessionStorage.getItem(FOUNDER_LETTER_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function dismissFounderLetter() {
+  try {
+    window.sessionStorage.setItem(FOUNDER_LETTER_STORAGE_KEY, "true");
+  } catch {
+    // Private browsing may deny storage; the dialog still closes for this visit.
+  }
+}
+
+function closeFounderLetter({ restoreFocus = true } = {}) {
+  if (!founderLetter) return;
+  founderLetter.classList.remove("is-visible");
+  document.body.classList.remove("founder-letter-active");
+  dismissFounderLetter();
+  // 先淡出（opacity 过渡），过渡结束后再真正隐藏，避免隐形遮罩拦截页面点击
+  window.setTimeout(() => {
+    founderLetter.setAttribute("aria-hidden", "true");
+    founderLetter.hidden = true;
+    if (restoreFocus) founderLetterLastFocus?.focus();
+  }, 240);
+}
+
+function showFounderLetter() {
+  if (!founderLetter || hasDismissedFounderLetter()) return;
+  founderLetterLastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  founderLetter.hidden = false;
+  founderLetter.setAttribute("aria-hidden", "false");
+  document.body.classList.add("founder-letter-active");
+  requestAnimationFrame(() => founderLetter.classList.add("is-visible"));
+  const closeButton = founderLetter.querySelector("[data-founder-letter-close]");
+  if (closeButton instanceof HTMLElement) closeButton.focus();
+}
+
+if (founderLetter) {
+  founderLetter.querySelectorAll("[data-founder-letter-close]").forEach((element) => {
+    element.addEventListener("click", () => closeFounderLetter());
+  });
+  founderLetter.querySelectorAll("[data-founder-letter-action]").forEach((element) => {
+    element.addEventListener("click", () => closeFounderLetter({ restoreFocus: false }));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !founderLetter.hidden) closeFounderLetter();
+  });
+  window.setTimeout(showFounderLetter, 220);
+}
 
 document.querySelectorAll("[data-assessment-link]").forEach((element) => {
   if (element instanceof HTMLAnchorElement) element.href = DIAGNOSIS_URL;

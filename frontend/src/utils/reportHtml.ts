@@ -87,7 +87,7 @@ export function normalizeReportHtml(value: string): string {
 }
 
 export function sanitizeReportHtml(value: string): string {
-  const allowedTags = new Set(["ARTICLE", "SECTION", "H2", "H3", "H4", "P", "STRONG", "EM", "UL", "OL", "LI", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DIV", "SPAN", "BR"]);
+  const allowedTags = new Set(["ARTICLE", "SECTION", "H2", "H3", "H4", "P", "STRONG", "EM", "UL", "OL", "LI", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DIV", "SPAN", "BR", "A"]);
   const container = document.createElement("div");
   container.innerHTML = value;
   for (const element of Array.from(container.querySelectorAll("*"))) {
@@ -96,7 +96,8 @@ export function sanitizeReportHtml(value: string): string {
       continue;
     }
     for (const attribute of Array.from(element.attributes)) {
-      if (attribute.name !== "class") element.removeAttribute(attribute.name);
+      const isSafeLink = element.tagName === "A" && attribute.name === "href" && /^https?:\/\//i.test(attribute.value);
+      if (attribute.name !== "class" && !isSafeLink) element.removeAttribute(attribute.name);
     }
   }
   return container.innerHTML;
