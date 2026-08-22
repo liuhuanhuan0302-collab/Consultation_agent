@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import AiConversationMessage, User
 from app.repositories.consult_repo import get_report_by_id
+from app.service.report_content import sanitize_report_content
 from app.utils.auth import ReportViewer
 
 router = APIRouter()
@@ -39,7 +40,7 @@ def admin_get_report(report_id: int, db: Session = Depends(get_db), user: User =
         "public_token": report.public_token,
         "title": report.title,
         "status": report.status,
-        "html_content": report.html_content,
+        "html_content": sanitize_report_content(report.html_content),
         "summary": json.loads(report.summary_json or "{}"),
         "advisor_messages": [
             {

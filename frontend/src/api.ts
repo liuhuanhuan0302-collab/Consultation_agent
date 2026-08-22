@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, CaseStudy, ChannelSource, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, Report, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, Report, ScoreResponse, User } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -17,7 +17,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, payload.detail || `请求失败：${response.status}`);
+    const detail = payload.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((item: { msg?: string }) => item.msg || JSON.stringify(item)).join("；")
+      : detail || `请求失败：${response.status}`;
+    throw new ApiError(response.status, message);
   }
   return response.json();
 }
@@ -41,6 +45,27 @@ async function downloadFile(path: string, fallbackName: string): Promise<void> {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+export type LeadQueryParams = {
+  industry?: string;
+  lead_level?: string;
+  source_code?: string;
+  created_from?: string;
+  created_to?: string;
+  view_status?: string;
+  processing_status?: string;
+  export_status?: string;
+  sort?: string;
+};
+
+function leadQueryString(params: LeadQueryParams): string {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) search.set(key, value);
+  });
+  const text = search.toString();
+  return text ? `?${text}` : "";
 }
 
 export const api = {
@@ -73,15 +98,12 @@ export const api = {
       body: JSON.stringify({ answers })
     }),
   submissionReport: (submissionId: number, sessionToken: string) =>
-    request<Report>(`/api/public/submissions/${submissionId}/report?session_token=${encodeURIComponent(sessionToken)}`),
+    request<Report>(`/api/public/submissions/${submissionId}/report`, {
+      headers: { "X-Session-Token": sessionToken }
+    }),
   publicReport: (token: string) => request<Report>(`/api/public/reports/${token}`),
   regenerateReportForTesting: (token: string) =>
     request<Report>(`/api/public/reports/${token}/regenerate`, { method: "POST" }),
-  emailReport: (token: string, email: string) =>
-    request<{ message: string }>(`/api/public/reports/${token}/email`, {
-      method: "POST",
-      body: JSON.stringify({ email })
-    }),
   login: (email: string, password: string) =>
     request<{ message: string }>("/api/admin/auth/login", {
       method: "POST",
@@ -90,12 +112,14 @@ export const api = {
   logout: () => request<{ message: string }>("/api/admin/auth/logout", { method: "POST" }),
   me: () => request<User>("/api/admin/me"),
   analytics: () => request<AnalyticsSummary>("/api/admin/analytics/summary"),
-  leads: () => request<Lead[]>("/api/admin/leads"),
+  leads: (params: LeadQueryParams = {}) => request<Lead[]>(`/api/admin/leads${leadQueryString(params)}`),
   leadDetail: (leadId: number) => request<LeadDetail>(`/api/admin/leads/${leadId}`),
-  triggerLeadResearch: (leadId: number) =>
-    request<{ status: string; message?: string }>(`/api/admin/leads/${leadId}/research`, {
+  triggerLeadResearch: (leadId: number, force = false) =>
+    request<{ status: string; message?: string }>(`/api/admin/leads/${leadId}/research${force ? "?force=true" : ""}`, {
       method: "POST"
     }),
+  resumeReportDelivery: (leadId: number) =>
+    request<{ message: string }>(`/api/admin/leads/${leadId}/resume-delivery`, { method: "POST" }),
   updateLeadDiagnosticEmail: (leadId: number, email: string) =>
     request<{ message: string }>(`/api/admin/leads/${leadId}/diagnostic-email`, {
       method: "PUT",
@@ -104,7 +128,13 @@ export const api = {
   deleteLead: (leadId: number) =>
     request<{ message: string }>(`/api/admin/leads/${leadId}`, { method: "DELETE" }),
   leadWordExport: (leadId: number) => downloadFile(`/api/admin/leads/${leadId}/export/word`, `lead-${leadId}.docx`),
-  leadsExport: () => downloadFile("/api/admin/leads/export", "leads.csv"),
+  leadsExport: (params: LeadQueryParams = {}) => downloadFile(`/api/admin/leads/export${leadQueryString(params)}`, "leads.csv"),
+  exportUnexportedLeads: () =>
+    request<{ batch_id: number | null; rows_count: number; message: string }>("/api/admin/leads/export-unexported", {
+      method: "POST"
+    }),
+  exportBatches: () => request<ExportBatch[]>("/api/admin/leads/export-batches"),
+  downloadExportBatch: (batchId: number) => downloadFile(`/api/admin/leads/export-batches/${batchId}/download`, `export-batch-${batchId}.csv`),
   gatewayConfig: () => request<GatewayConfig>("/api/admin/api-gateway"),
   saveSearchConfig: (payload: Record<string, unknown>) =>
     request<GatewayConfig>("/api/admin/api-gateway/search", {

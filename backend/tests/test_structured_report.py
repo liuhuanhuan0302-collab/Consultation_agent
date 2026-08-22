@@ -72,6 +72,8 @@ def test_structured_report_renders_all_six_sections():
     assert "局部清晰 vs. 整体模糊" in html
     assert "选择唯一主战役" in html
     assert "销售线索评分助手" in html
+    assert "适用方向" not in html
+    assert "闪电战" not in html
     assert "两周内完成事实核验" in html
     # 维度分析按模块对齐（三栏表格形式）
     assert "M01 一心" in html
@@ -96,3 +98,88 @@ def test_structured_report_escapes_user_input():
     html = render_structured_report_html(payload, data)
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ══════════════════════════════════════════════════════════════════
+# call_deepseek：网关 Key 失效时不得把 .env DeepSeek Key 发往自定义地址
+# ══════════════════════════════════════════════════════════════════
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+from app.config import Settings
+from app.service import reporting
+from app.service.api_gateway_service import LlmGatewayOverride
+from app.service.reporting import call_deepseek
+
+
+class _FakeHttpClient:
+    requests: list[tuple[str, dict]] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args, **kwargs):
+        return None
+
+    async def post(self, url, headers=None, json=None):
+        type(self).requests.append((url, headers or {}))
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"choices": [{"message": {"content": "生成内容"}}]},
+        )
+
+
+def _env_settings(monkeypatch, **kwargs) -> None:
+    monkeypatch.setattr(
+        reporting,
+        "get_settings",
+        lambda: Settings(deepseek_api_key="sk-env", deepseek_base_url="https://api.deepseek.com", _env_file=None, **kwargs),
+    )
+
+
+def test_call_deepseek_refuses_env_key_with_custom_base(monkeypatch):
+    """网关保存了自定义 LLM 地址但网关 Key 不可用（解密失败）时，
+    禁止把 .env 的 DeepSeek Key 发往该地址，直接失败提示管理员。"""
+    _env_settings(monkeypatch)
+    _FakeHttpClient.requests.clear()
+    monkeypatch.setattr(reporting.httpx, "AsyncClient", _FakeHttpClient)
+
+    override = LlmGatewayOverride(api_key=None, base_url="https://third-party-llm.example", model=None)
+    with pytest.raises(RuntimeError, match="无法解密"):
+        asyncio.run(call_deepseek({}, llm_override=override))
+
+    assert _FakeHttpClient.requests == []
+
+
+def test_call_deepseek_env_fallback_uses_official_endpoint(monkeypatch):
+    """未配置网关地址时，正常回退 .env Key + 官方地址。"""
+    _env_settings(monkeypatch)
+    _FakeHttpClient.requests.clear()
+    monkeypatch.setattr(reporting.httpx, "AsyncClient", _FakeHttpClient)
+
+    result = asyncio.run(call_deepseek({}, llm_override=LlmGatewayOverride(api_key=None, base_url=None, model=None)))
+
+    assert result == "生成内容"
+    url, headers = _FakeHttpClient.requests[0]
+    assert url == "https://api.deepseek.com/v1/chat/completions"
+    assert headers["Authorization"] == "Bearer sk-env"
+
+
+def test_call_deepseek_uses_gateway_key_with_custom_base(monkeypatch):
+    """网关地址与网关 Key 均可用时，使用网关 Key 调用自定义地址（合法配置不受影响）。"""
+    _env_settings(monkeypatch)
+    _FakeHttpClient.requests.clear()
+    monkeypatch.setattr(reporting.httpx, "AsyncClient", _FakeHttpClient)
+
+    override = LlmGatewayOverride(api_key="sk-gateway", base_url="https://third-party-llm.example", model=None)
+    result = asyncio.run(call_deepseek({}, llm_override=override))
+
+    assert result == "生成内容"
+    url, headers = _FakeHttpClient.requests[0]
+    assert url == "https://third-party-llm.example/v1/chat/completions"
+    assert headers["Authorization"] == "Bearer sk-gateway"

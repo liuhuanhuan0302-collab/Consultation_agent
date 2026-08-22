@@ -18,6 +18,22 @@ services:
     networks:
       - app_net
 
+  mysql_staging_init:
+    image: mysql:8.0
+    profiles: ["staging"]
+    restart: "no"
+    env_file:
+      - .env.production
+      - .env.staging
+    volumes:
+      - ./deploy/mysql/init-staging-database.sh:/scripts/init-staging-database.sh:ro
+    command: ["sh", "/scripts/init-staging-database.sh"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -32,6 +48,12 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health')); raise SystemExit(0 if data.get('database') == 'ok' else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - app_net
 
@@ -51,7 +73,7 @@ services:
       mysql:
         condition: service_healthy
       backend:
-        condition: service_started
+        condition: service_healthy
     networks:
       - app_net
 
@@ -75,11 +97,81 @@ services:
     networks:
       - app_net
 
+  backend_staging:
+    build: ./backend
+    profiles: ["staging"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - .env.staging
+    volumes:
+      - backend_staging_data:/app/data
+    depends_on:
+      mysql_staging_init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health')); raise SystemExit(0 if data.get('database') == 'ok' else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - app_net
+
+  report_worker_staging:
+    build: ./backend
+    profiles: ["staging"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: ["python", "scripts/report_worker.py"]
+    env_file:
+      - .env.staging
+    volumes:
+      - backend_staging_data:/app/data
+    depends_on:
+      mysql_staging_init:
+        condition: service_completed_successfully
+      backend_staging:
+        condition: service_healthy
+    networks:
+      - app_net
+
+  frontend_staging:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_APP_BASE_PATH: /diagnosis/
+        VITE_DIAGNOSIS_URL: /diagnosis/?source=STAGING_WEBSITE
+    profiles: ["staging"]
+    restart: unless-stopped
+    environment:
+      BACKEND_UPSTREAM: backend_staging:8000
+    ports:
+      - "8081:80"
+    volumes:
+      - caddy_staging_data:/data
+      - caddy_staging_config:/config
+    depends_on:
+      backend_staging:
+        condition: service_healthy
+    networks:
+      - app_net
+
 volumes:
   mysql_data:
   backend_data:
+  backend_staging_data:
   caddy_data:
   caddy_config:
+  caddy_staging_data:
+  caddy_staging_config:
 
 networks:
   app_net:

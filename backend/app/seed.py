@@ -42,10 +42,11 @@ def distribute_question_max_scores(question_count: int, module_max_score: int) -
 def seed_initial_data(db: Session) -> None:
     settings = get_settings()
     if not db.query(User).first():
-        if settings.environment.lower() == "production":
+        protected_environment = settings.environment.lower() in {"production", "staging"}
+        if protected_environment:
             if not settings.initial_admin_email or not settings.initial_admin_password:
                 raise RuntimeError(
-                    "生产环境首次启动必须设置 INITIAL_ADMIN_EMAIL 和 INITIAL_ADMIN_PASSWORD；"
+                    "生产或测试环境首次启动必须设置 INITIAL_ADMIN_EMAIL 和 INITIAL_ADMIN_PASSWORD；"
                     "拒绝创建固定默认管理员账号"
                 )
             admin_email = settings.initial_admin_email
@@ -63,8 +64,8 @@ def seed_initial_data(db: Session) -> None:
                 password_hash=hash_password(admin_password),
             )
         )
-        if settings.environment.lower() == "production":
-            logger.info("已使用 INITIAL_ADMIN_EMAIL 创建首个生产管理员账号")
+        if protected_environment:
+            logger.info("已使用 INITIAL_ADMIN_EMAIL 创建首个 %s 管理员账号", settings.environment)
         else:
             logger.warning("已创建开发环境演示管理员 admin@example.com / Admin123!；禁止用于生产环境")
 

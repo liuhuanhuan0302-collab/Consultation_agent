@@ -11,6 +11,8 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
 
+from pypdf import PdfReader
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -21,10 +23,48 @@ from reportlab.graphics.shapes import Circle, Drawing, Line, Polygon, Rect, Stri
 
 from app.config import get_settings
 from app.models import Report
+from app.service.report_content import sanitize_report_content
 
 
 TAG_RE = re.compile(r"<[^>]+>")
 logger = logging.getLogger(__name__)
+
+REPORT_SECTION_TITLES = [
+    "一、执行摘要",
+    "二、能力成熟度分析",
+    "三、关键矛盾与核心诊断",
+    "四、工作坊议题地图",
+    "五、优先 AI 场景与案例",
+    "六、管理层行动建议",
+]
+
+
+class ReportPdfValidationError(RuntimeError):
+    """最终 PDF 与固定报告模板不一致，禁止发送给客户。"""
+
+
+def validate_report_html(report: Report) -> None:
+    missing = [title for title in REPORT_SECTION_TITLES if title not in (report.html_content or "")]
+    if missing:
+        raise ReportPdfValidationError(f"网页版报告缺少章节：{', '.join(missing)}")
+
+
+def validate_report_pdf_bytes(pdf_bytes: bytes) -> None:
+    if not pdf_bytes.startswith(b"%PDF-") or len(pdf_bytes) < 10_000:
+        raise ReportPdfValidationError("PDF 文件为空、损坏或内容异常精简")
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+        if not reader.pages:
+            raise ReportPdfValidationError("PDF 没有有效页面")
+        extracted = "".join((page.extract_text() or "") for page in reader.pages)
+    except ReportPdfValidationError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ReportPdfValidationError(f"PDF 无法解析：{exc}") from exc
+    normalized = re.sub(r"\s+", "", extracted)
+    missing = [title for title in REPORT_SECTION_TITLES if re.sub(r"\s+", "", title) not in normalized]
+    if missing:
+        raise ReportPdfValidationError(f"PDF 缺少章节：{', '.join(missing)}")
 
 
 def register_cjk_font() -> str:
@@ -124,12 +164,12 @@ def make_radar_chart(dimensions: list[dict], font_name: str) -> Drawing:
 
 async def render_report_pdf_bytes(report: Report) -> bytes:
     settings = get_settings()
-    if settings.pdf_browser_render:
-        try:
-            return await asyncio.to_thread(render_report_pdf_bytes_with_browser, report)
-        except Exception:
-            logger.exception("浏览器渲染 PDF 失败，降级为文本版 PDF: report_id=%s", report.id)
-    return render_report_pdf_bytes_fallback(report)
+    if not settings.pdf_browser_render:
+        raise ReportPdfValidationError("浏览器 PDF 渲染未启用，已阻止发送简化版报告")
+    validate_report_html(report)
+    pdf_bytes = await asyncio.to_thread(render_report_pdf_bytes_with_browser, report)
+    validate_report_pdf_bytes(pdf_bytes)
+    return pdf_bytes
 
 
 def browser_executable() -> str:
@@ -169,6 +209,7 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
             "--no-default-browser-check",
             "--hide-scrollbars",
             "--print-to-pdf-no-header",
+            "--no-pdf-header-footer",
             f"--user-data-dir={profile_path}",
             "--virtual-time-budget=3000",
             f"--print-to-pdf={pdf_path}",
@@ -221,7 +262,7 @@ def render_report_pdf_bytes_fallback(report: Report) -> bytes:
     dimensions = report_dimensions(report)
     if dimensions:
         story.extend([make_bar_chart(dimensions, font_name), Spacer(1, 14), make_radar_chart(dimensions, font_name), Spacer(1, 14)])
-    for line in html_to_text(report.html_content).splitlines():
+    for line in html_to_text(sanitize_report_content(report.html_content)).splitlines():
         story.append(Paragraph(line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), normal))
         story.append(Spacer(1, 6))
     document.build(story)
@@ -297,7 +338,7 @@ def render_report_html_attachment(report: Report) -> bytes:
     </section>
     {cards}
     {dimension_table}
-    <article class="report-html">{report.html_content}</article>
+    <article class="report-html">{sanitize_report_content(report.html_content)}</article>
   </main>
 </body>
 </html>"""

@@ -26,8 +26,12 @@ DEFAULT_SEARCH_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
 }
 
-# DeepSeek 联网搜索默认模型（Responses API + web_search 工具）。
+# DeepSeek 联网搜索默认模型（官方 Anthropic 协议接口 + 服务端 web_search 工具）。
 DEFAULT_DEEPSEEK_SEARCH_MODEL = "deepseek-v4-flash"
+
+# DeepSeek 官方 Anthropic 协议路径：联网搜索改用 /anthropic/v1/messages，
+# 机器引用只从 web_search_tool_result 块读取（/responses 适配不返回可核验引用）。
+DEEPSEEK_ANTHROPIC_MESSAGES_PATH = "/anthropic/v1/messages"
 
 SUPPORTED_SEARCH_PROVIDERS = tuple(DEFAULT_SEARCH_BASE_URLS) + ("custom",)
 
@@ -54,6 +58,11 @@ def _is_public_ip(ip: str) -> bool:
         or address.is_multicast
         or address.is_unspecified
     )
+
+
+def deepseek_anthropic_messages_url(base_url: str) -> str:
+    """DeepSeek 服务商的 Anthropic 协议 Messages 接口地址。"""
+    return f"{base_url.rstrip('/')}{DEEPSEEK_ANTHROPIC_MESSAGES_PATH}"
 
 
 def validate_gateway_url(url: str) -> str:
@@ -148,21 +157,26 @@ def get_gateway_config(db: Session) -> GatewayApiConfig:
 
 
 def effective_search_config(db: Session) -> SearchGatewayConfig | None:
-    """检索配置：未启用或 key 缺失/解密失败时返回 None，调用方跳过联网检索。"""
+    """Return the required search config, sharing the DeepSeek env key when needed."""
     config = get_gateway_config(db)
-    if not config.search_enabled:
-        return None
+    settings = get_settings()
+    provider = (config.search_provider or "deepseek").strip() or "deepseek"
     api_key = decrypt_secret(config.search_api_key)
+    custom_base = (config.search_base_url or "").strip()
+    # 仅当未配置自定义接口地址时，才允许共享 .env 的 DeepSeek Key；
+    # 防止把 .env Key 发往第三方地址（如网关 Key 因加密密钥轮换无法解密）。
+    if provider == "deepseek" and not api_key and not custom_base:
+        api_key = settings.deepseek_api_key
     if not api_key:
         return None
-    base_url = (config.search_base_url or "").strip() or DEFAULT_SEARCH_BASE_URLS.get(config.search_provider, "")
+    base_url = custom_base or DEFAULT_SEARCH_BASE_URLS.get(provider, "")
     if not base_url:
         return None
     model = (config.search_model or "").strip() or None
-    if config.search_provider == "deepseek" and not model:
+    if provider == "deepseek" and not model:
         model = DEFAULT_DEEPSEEK_SEARCH_MODEL
     return SearchGatewayConfig(
-        provider=config.search_provider,
+        provider=provider,
         api_key=api_key,
         base_url=base_url,
         timeout_seconds=max(3, config.search_timeout_seconds),

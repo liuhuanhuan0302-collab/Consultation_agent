@@ -1,0 +1,58 @@
+version: 1
+policy: single-writer
+orchestrator: codex
+active_leases:
+  - lease_id: lease-turn-0009
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0009
+    issue_id: I-070
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/public.py
+      - backend/tests/test_lead_reroll.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+    forbidden_paths:
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/schemas/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/company_research.py
+      - backend/app/service/submission_service.py
+      - backend/app/service/lead_service.py
+      - backend/migrations/**
+      - backend/scripts/**
+      - frontend/**
+      - official-website/**
+protected_paths:
+  - AGENTS.md
+  - CLAUDE.md
+  - docs/coordination/PROTOCOL.md
+  - docs/coordination/SPEC.md
+  - docs/coordination/MILESTONES.md
+  - docs/coordination/DAG.yaml
+  - docs/coordination/STATE.json
+  - docs/coordination/OWNERSHIP.yaml
+  - docs/coordination/DEVELOPMENT_LOG.md
+  - docs/coordination/REVIEW_LOG.md
+log_ownership:
+  development_log:
+    path: docs/coordination/DEVELOPMENT_LOG.md
+    writer: claude_code
+    mode: append_only
+  review_log:
+    path: docs/coordination/REVIEW_LOG.md
+    writer: codex
+    mode: append_only
+default_worker_permissions:
+  read: repository
+  write: leased_paths_only
+  forbidden:
+    - git_stage
+    - git_commit
+    - git_reset
+    - delete_untracked
+    - deploy
+    - production_data
+    - real_email

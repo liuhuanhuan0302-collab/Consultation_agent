@@ -2,6 +2,7 @@ export type Lead = {
   id: number;
   session_token: string;
   company_name: string | null;
+  city: string | null;
   industry: string | null;
   company_size: string | null;
   annual_revenue: string | null;
@@ -18,6 +19,23 @@ export type Lead = {
   created_at: string;
   updated_at: string;
   last_activity_at: string | null;
+  view_status: string;
+  first_viewed_at: string | null;
+  first_viewed_by: string | null;
+  processing_status: string;
+  processing_note: string | null;
+  export_status: string;
+  first_exported_at: string | null;
+  last_exported_at: string | null;
+};
+
+export type ExportBatch = {
+  id: number;
+  created_at: string;
+  rows_count: number;
+  file_name: string;
+  exported_by: string | null;
+  filters_summary: string | null;
 };
 
 export type Question = {
@@ -88,6 +106,8 @@ export type Report = {
   };
   delivery_status?: string | null;
   queue_position?: number | null;
+  delivery_error?: string | null;
+  generation_error?: string | null;
 };
 
 export type CaseStudy = {
@@ -140,23 +160,29 @@ export type AnalyticsSummary = {
   industry_distribution: AnalyticsBucket[];
 };
 
+export type CompanyResearchSubsection = {
+  title: string;
+  content: string;
+};
+
+export type CompanyResearchValue = string | CompanyResearchSubsection[];
+
 export type CompanyResearch = {
   company_name?: string;
-  company_overview?: string;
-  revenue_scale?: string;
-  products?: string;
-  industry_characteristics?: string;
-  development_status?: string;
-  challenges?: string;
-  ai_opportunities?: string;
-  analysis?: string;
+  company_overview?: CompanyResearchValue;
+  revenue_scale?: CompanyResearchValue;
+  products?: CompanyResearchValue;
+  industry_characteristics?: CompanyResearchValue;
+  development_status?: CompanyResearchValue;
+  challenges?: CompanyResearchValue;
+  ai_opportunities?: CompanyResearchValue;
+  analysis?: CompanyResearchValue;
   sources?: { title: string; url: string }[];
   researched_at?: string;
 };
 
 export type GatewayConfig = {
-  search_enabled: boolean;
-  search_provider: "bocha" | "serpapi" | "custom";
+  search_provider: "bocha" | "serpapi" | "deepseek" | "custom";
   search_api_key: string;
   search_base_url: string | null;
   search_timeout_seconds: number;
@@ -197,9 +223,21 @@ export type LeadDetail = {
     public_token: string;
     title: string;
     status: string;
+    research_status: string;
+    research_started_at: string | null;
+    research_completed_at: string | null;
+    research_elapsed_seconds: number | null;
+    generation_started_at: string | null;
+    generation_completed_at: string | null;
+    generation_elapsed_seconds: number | null;
+    pdf_status: string;
+    pdf_started_at: string | null;
+    pdf_completed_at: string | null;
+    pdf_elapsed_seconds: number | null;
     html_content: string;
     summary: Record<string, unknown>;
     company_research: CompanyResearch | null;
+    generation_error: string | null;
     created_at: string;
     advisor_messages: {
       role: string;
@@ -215,5 +253,9 @@ export type LeadDetail = {
     recipient_email: string;
     last_error: string | null;
     sent_at: string | null;
+    started_at: string | null;
+    updated_at: string | null;
+    elapsed_seconds: number | null;
+    queue_position: number | null;
   } | null;
 };

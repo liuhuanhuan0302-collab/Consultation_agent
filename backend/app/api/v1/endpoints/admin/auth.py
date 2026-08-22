@@ -12,6 +12,7 @@ from app.schemas import LoginRequest, MessageResponse, PasswordChangeRequest, Us
 from app.utils.auth import get_current_user
 from app.utils.logging_utils import write_operation_log
 from app.utils.security import create_access_token, hash_password, verify_password
+from app.utils.time_utils import utc_now
 
 router = APIRouter()
 
@@ -84,6 +85,9 @@ def change_current_password(
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码错误")
     user.password_hash = hash_password(payload.new_password)
+    # 记录修改时刻：鉴权拒绝签发时间早于该时刻的 JWT，
+    # 使修改前已泄漏的 token（Bearer 或 Cookie）立即失效。
+    user.password_changed_at = utc_now()
     write_operation_log(db, user, "change_own_password", "user", str(user.id))
     db.commit()
     response.delete_cookie(key=get_settings().admin_session_cookie_name, path="/api/admin", samesite="lax")

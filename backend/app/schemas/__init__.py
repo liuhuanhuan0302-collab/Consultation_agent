@@ -14,6 +14,7 @@ from app.schemas.gateway import (
     SearchTestRequest,
 )
 from app.schemas.lead import (
+    ExportBatchResponse,
     LeadCreate,
     LeadCreatedResponse,
     LeadDiagnosticEmailUpdate,
@@ -46,6 +47,7 @@ __all__ = [
     "ChannelUpsert",
     "DimensionScoreRead",
     "DraftSaveRequest",
+    "ExportBatchResponse",
     "GatewayConfigRead",
     "LeadCreate",
     "LeadCreatedResponse",

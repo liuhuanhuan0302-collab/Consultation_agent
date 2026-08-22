@@ -8,7 +8,7 @@
 
     @api path /api/*
     handle @api {
-        reverse_proxy backend:8000
+        reverse_proxy {$BACKEND_UPSTREAM:backend:8000}
     }
 
     redir /diagnosis /diagnosis/ permanent

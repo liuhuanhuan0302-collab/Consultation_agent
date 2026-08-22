@@ -27,6 +27,21 @@ class ReportDeliveryStatus(str, Enum):
     failed = "failed"
 
 
+class CompanyResearchStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    generated = "generated"
+    review = "review"
+    failed = "failed"
+
+
+class ReportFileStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    generated = "generated"
+    failed = "failed"
+
+
 class Report(Base):
     __tablename__ = "reports"
 
@@ -38,6 +53,18 @@ class Report(Base):
     html_content: Mapped[str] = mapped_column(Text)
     summary_json: Mapped[str | None] = mapped_column(Text)
     company_research_json: Mapped[str | None] = mapped_column(Text)
+    research_status: Mapped[CompanyResearchStatus] = mapped_column(
+        String(32), default=CompanyResearchStatus.pending.value, index=True
+    )
+    research_started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    research_completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    generation_started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    generation_completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    pdf_status: Mapped[ReportFileStatus] = mapped_column(
+        String(32), default=ReportFileStatus.pending.value, index=True
+    )
+    pdf_started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    pdf_completed_at: Mapped[datetime | None] = mapped_column(DateTime)
     model_vendor: Mapped[str] = mapped_column(String(80), default="deepseek")
     model_name: Mapped[str | None] = mapped_column(String(120))
     generation_error: Mapped[str | None] = mapped_column(Text)
@@ -85,6 +112,7 @@ class ReportDeliveryJob(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     last_error: Mapped[str | None] = mapped_column(Text)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    lock_token: Mapped[str | None] = mapped_column(String(64))
     run_after: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)

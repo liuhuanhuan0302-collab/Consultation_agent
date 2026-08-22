@@ -13,8 +13,10 @@ class GatewayApiConfig(Base):
     __tablename__ = "gateway_api_config"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    search_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    search_provider: Mapped[str] = mapped_column(String(32), default="bocha")
+    # Kept for database compatibility. Search is a required report stage and
+    # application code no longer treats this legacy flag as a switch.
+    search_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    search_provider: Mapped[str] = mapped_column(String(32), default="deepseek")
     search_api_key: Mapped[str | None] = mapped_column(String(255))
     search_base_url: Mapped[str | None] = mapped_column(String(500))
     search_timeout_seconds: Mapped[int] = mapped_column(Integer, default=15)

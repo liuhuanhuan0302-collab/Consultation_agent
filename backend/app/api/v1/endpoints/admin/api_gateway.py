@@ -44,7 +44,6 @@ router = APIRouter()
 def serialize_gateway_config(config: GatewayApiConfig) -> GatewayConfigRead:
     """key 解密后掩码返回，解密失败（密钥已轮换）显示为空并提示重新录入。"""
     return GatewayConfigRead(
-        search_enabled=config.search_enabled,
         search_provider=config.search_provider,
         search_api_key=mask_key(decrypt_secret(config.search_api_key)),
         search_base_url=config.search_base_url,
@@ -94,10 +93,12 @@ def update_search_config(payload: SearchConfigUpdate, db: Session = Depends(get_
     config = get_gateway_config(db)
     new_key = payload.search_api_key.strip()
     provider_changed = payload.search_provider != config.search_provider
-    if (provider_changed or payload.search_provider == "custom") and not new_key:
+    env_deepseek_key = get_settings().deepseek_api_key
+    can_use_env_key = payload.search_provider == "deepseek" and bool(env_deepseek_key)
+    if (provider_changed or payload.search_provider == "custom") and not new_key and not can_use_env_key:
         raise HTTPException(status_code=422, detail="切换搜索服务商或使用自定义服务商时，必须填写新的搜索 API Key（不能沿用旧 Key）")
 
-    config.search_enabled = payload.search_enabled
+    config.search_enabled = True
     config.search_provider = payload.search_provider
     if new_key:
         config.search_api_key = encrypt_secret(new_key)
@@ -160,9 +161,12 @@ async def test_search_gateway(payload: SearchTestRequest, db: Session = Depends(
             return {"ok": False, "error": "自定义服务商必须填写新的搜索 API Key（不能沿用旧 Key）"}
         api_key = form_key
     else:
-        if provider_changed and not form_key:
+        env_deepseek_key = get_settings().deepseek_api_key or ""
+        if provider_changed and provider != "deepseek" and not form_key:
             return {"ok": False, "error": "切换搜索服务商时必须填写新的搜索 API Key（不能沿用旧 Key）"}
         api_key = form_key or decrypt_secret(saved.search_api_key) or ""
+        if provider == "deepseek" and not api_key:
+            api_key = env_deepseek_key
     if not api_key:
         return {"ok": False, "error": "请先填写搜索 API Key（输入框留空时会使用已保存的 Key，当前两者都为空）"}
 

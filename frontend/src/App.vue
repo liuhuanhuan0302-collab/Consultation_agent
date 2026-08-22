@@ -18,8 +18,8 @@ import {
 } from "lucide-vue-next";
 import ReportCharts from "./components/ReportCharts.vue";
 import { api } from "./api";
-import { adminNotice, error } from "./composables/feedback";
-import { useAdmin, companyResearchSections, searchProviderOfficialUrls } from "./composables/useAdmin";
+import { dismissToast, error, toasts } from "./composables/feedback";
+import { useAdmin, companyResearchSections, researchLegacyText, researchSubsections, searchProviderOfficialUrls } from "./composables/useAdmin";
 import { useQuestionnaire } from "./composables/useQuestionnaire";
 import { useReportView } from "./composables/useReportView";
 import { isAdmin, reportToken } from "./utils/appPaths";
@@ -35,8 +35,7 @@ const {
   busy,
   draftSaved,
   reportWaitSeconds,
-  deliveryStatus,
-  queuePosition,
+  reportFailure,
   missingNoticeVisible,
   missingNoticeMessage,
   leadForm,
@@ -66,6 +65,7 @@ const {
   submitQuestionnaire,
   handleBeforeUnload,
   clearReportPolling,
+  restartFlow,
 } = useQuestionnaire();
 
 const {
@@ -86,6 +86,66 @@ const {
 
 const isLocalReportTesting = import.meta.env.DEV && ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
 const regeneratingReport = ref(false);
+let leadStatusRefreshTimer: number | null = null;
+let leadStatusRefreshing = false;
+
+const processStatusLabels: Record<string, string> = {
+  pending: "未开始",
+  queued: "等待处理",
+  processing: "处理中",
+  generating: "生成中",
+  generated: "已完成",
+  sent: "已发送",
+  failed: "待人工处理",
+  review: "待人工审核",
+};
+
+function processStatusLabel(status: string | null | undefined) {
+  return processStatusLabels[status || ""] || status || "未开始";
+}
+
+function processStatusTone(status: string | null | undefined) {
+  if (["generated", "sent"].includes(status || "")) return "done";
+  if (["failed", "review"].includes(status || "")) return "failed";
+  if (["processing", "generating"].includes(status || "")) return "active";
+  return "pending";
+}
+
+/** 线索三维跟踪状态的中文映射。 */
+const viewStatusLabels: Record<string, string> = {
+  unviewed: "尚未查看",
+  viewed: "已经查看",
+};
+
+const processingStatusLabels: Record<string, string> = {
+  pending: "待处理",
+  processing: "处理中",
+  manual_review: "待人工处理",
+  completed: "已完成",
+};
+
+const exportStatusLabels: Record<string, string> = {
+  unexported: "未导出",
+  exported: "已导出",
+};
+
+const leadLevelLabels: Record<string, string> = {
+  high: "高意向",
+  medium: "中意向",
+  low: "低意向",
+};
+
+function statusLabel(map: Record<string, string>, status: string | null | undefined) {
+  return map[status || ""] || status || "-";
+}
+
+function formatElapsed(seconds: number | null | undefined) {
+  if (seconds === null || seconds === undefined) return "尚未开始";
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
+}
 
 async function regenerateTestReport() {
   const token = activeReport.value?.public_token;
@@ -114,6 +174,12 @@ const {
   leads,
   leadSortOrder,
   leadIndustryFilter,
+  leadCreatedFrom,
+  leadCreatedTo,
+  leadLevelFilter,
+  leadViewFilter,
+  leadProcessingFilter,
+  leadExportFilter,
   leadPageSize,
   leadPage,
   leadRuleDialogOpen,
@@ -121,6 +187,7 @@ const {
   leadDetailLoading,
   selectedLeadDetail,
   researchRunning,
+  resumeDeliveryRunning,
   diagnosticEmailDraft,
   diagnosticEmailUpdating,
   adminQuestions,
@@ -133,6 +200,10 @@ const {
   userForm,
   channelForm,
   leadsExporting,
+  leadsBatchExporting,
+  exportBatches,
+  exportBatchPanelOpen,
+  batchDownloading,
   leadWordExporting,
   questionModuleForm,
   questionForm,
@@ -163,10 +234,15 @@ const {
   loadAdminTab,
   goLeadPage,
   openLeadDetail,
+  openLeadDetailById,
   closeLeadDetail,
   runLeadResearch,
+  resumeReportDelivery,
   updateLeadDiagnosticEmail,
   exportLeads,
+  exportUnexported,
+  toggleExportBatches,
+  downloadBatch,
   exportLeadWord,
   deleteLead,
   logoutAdmin,
@@ -199,9 +275,32 @@ onMounted(async () => {
   } catch (err) {
     error.value = err instanceof Error ? err.message : "加载失败";
   }
+  if (isAdmin) {
+    leadStatusRefreshTimer = window.setInterval(async () => {
+      const detail = selectedLeadDetail.value;
+      if (!leadDetailOpen.value || !detail || leadStatusRefreshing) return;
+      const statuses = [
+        detail.report?.research_status,
+        detail.report?.status,
+        detail.report?.pdf_status,
+        detail.delivery?.status,
+      ];
+      if (!statuses.some((status) => ["pending", "queued", "processing", "generating"].includes(status || ""))) return;
+      leadStatusRefreshing = true;
+      try {
+        selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
+      } finally {
+        leadStatusRefreshing = false;
+      }
+    }, 5000);
+  }
 });
 
-onBeforeUnmount(clearReportPolling);
+onBeforeUnmount(() => {
+  clearReportPolling();
+  window.removeEventListener("beforeunload", handleBeforeUnload);
+  if (leadStatusRefreshTimer !== null) window.clearInterval(leadStatusRefreshTimer);
+});
 </script>
 
 <template>
@@ -210,11 +309,20 @@ onBeforeUnmount(clearReportPolling);
     <span>{{ missingNoticeMessage }}</span>
   </div>
 
+  <div class="toast-stack" role="status" aria-live="polite">
+    <div v-for="toast in toasts" :key="toast.id" class="toast" :class="toast.kind">
+      <span class="toast-message">{{ toast.message }}</span>
+      <div v-if="toast.kind === 'severe'" class="toast-actions">
+        <button v-if="toast.leadId" class="toast-link" type="button" @click="dismissToast(toast.id); openLeadDetailById(toast.leadId)">查看客户</button>
+        <button class="toast-close" type="button" aria-label="关闭提示" @click="dismissToast(toast.id)">×</button>
+      </div>
+    </div>
+  </div>
+
   <main v-if="isAdmin && !adminToken" class="login-shell">
     <form class="login-box" @submit.prevent="loginAdmin">
       <Lock :size="28" />
       <h1>后台登录</h1>
-      <div v-if="error" class="alert">{{ error }}</div>
       <label>邮箱<input v-model="adminEmail" /></label>
       <label>密码<input v-model="adminPassword" type="password" /></label>
       <button class="primary">登录</button>
@@ -236,8 +344,6 @@ onBeforeUnmount(clearReportPolling);
       <button class="secondary admin-logout" @click="logoutAdmin"><LogOut :size="18" /> 退出</button>
     </aside>
     <section class="admin-main">
-      <div v-if="error" class="admin-feedback error-feedback">{{ error }}</div>
-      <div v-if="adminNotice" class="admin-feedback success-feedback">{{ adminNotice }}</div>
 
       <div v-if="adminTab === 'overview'">
         <div v-if="analytics" class="metric-grid">
@@ -310,21 +416,64 @@ onBeforeUnmount(clearReportPolling);
           <h2>线索列表</h2>
           <div class="table-action-buttons">
             <button class="secondary" type="button" @click="leadRuleDialogOpen = true"><BookOpen :size="18" /> 评分规则</button>
-            <button v-if="canExportLeads" class="secondary" type="button" :disabled="leadsExporting" @click="exportLeads"><ArrowDownToLine :size="18" /> {{ leadsExporting ? "导出中..." : "导出" }}</button>
+            <button v-if="canExportLeads" class="secondary" type="button" :disabled="leadsExporting" @click="exportLeads"><ArrowDownToLine :size="18" /> {{ leadsExporting ? "导出中..." : "导出筛选结果" }}</button>
+            <button v-if="canExportLeads" class="primary" type="button" :disabled="leadsBatchExporting" @click="exportUnexported"><ArrowDownToLine :size="18" /> {{ leadsBatchExporting ? "导出中..." : "一键导出未导出客户" }}</button>
+            <button v-if="canExportLeads" class="secondary" type="button" @click="toggleExportBatches"><FileText :size="18" /> {{ exportBatchPanelOpen ? "收起导出历史" : "导出历史" }}</button>
           </div>
         </div>
         <div class="lead-toolbar">
-          <label>
-            时间排序
-            <select v-model="leadSortOrder">
-              <option value="newest">最新优先</option>
-              <option value="oldest">最早优先</option>
-            </select>
+          <label class="lead-filter-date">
+            创建日期
+            <span class="date-range">
+              <input v-model="leadCreatedFrom" type="date" aria-label="创建日期起" />
+              <span class="date-sep">至</span>
+              <input v-model="leadCreatedTo" type="date" aria-label="创建日期止" />
+            </span>
           </label>
           <label>
             行业
             <select v-model="leadIndustryFilter">
               <option v-for="item in leadIndustryOptions" :key="item">{{ item }}</option>
+            </select>
+          </label>
+          <label>
+            线索等级
+            <select v-model="leadLevelFilter">
+              <option value="">全部</option>
+              <option v-for="(label, value) in leadLevelLabels" :key="value" :value="value">{{ label }}</option>
+            </select>
+          </label>
+          <label>
+            查看状态
+            <select v-model="leadViewFilter">
+              <option value="">全部</option>
+              <option value="unviewed">尚未查看</option>
+              <option value="viewed">已经查看</option>
+            </select>
+          </label>
+          <label>
+            处理状态
+            <select v-model="leadProcessingFilter">
+              <option value="">全部</option>
+              <option value="pending">待处理</option>
+              <option value="processing">处理中</option>
+              <option value="manual_review">待人工处理</option>
+              <option value="completed">已完成</option>
+            </select>
+          </label>
+          <label>
+            导出状态
+            <select v-model="leadExportFilter">
+              <option value="">全部</option>
+              <option value="unexported">未导出</option>
+              <option value="exported">已导出</option>
+            </select>
+          </label>
+          <label>
+            时间排序
+            <select v-model="leadSortOrder">
+              <option value="newest">最新优先</option>
+              <option value="oldest">最早优先</option>
             </select>
           </label>
           <label>
@@ -340,7 +489,7 @@ onBeforeUnmount(clearReportPolling);
         </div>
         <div class="leads-table-wrap">
           <table class="leads-table">
-            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>最近处理时间</th><th v-if="canDeleteLeads">操作</th></tr></thead>
+            <thead><tr><th>公司</th><th>行业</th><th>联系人</th><th>职位</th><th>联系</th><th>等级</th><th>查看</th><th>处理</th><th>导出</th><th>最近处理时间</th><th v-if="canDeleteLeads">操作</th></tr></thead>
             <tbody>
               <tr v-for="lead in pagedLeads" :key="lead.id" class="clickable-row" tabindex="0" @click="openLeadDetail(lead)" @keydown.enter="openLeadDetail(lead)">
                 <td :title="lead.company_name || ''">{{ lead.company_name }}</td>
@@ -348,14 +497,21 @@ onBeforeUnmount(clearReportPolling);
                 <td :title="lead.contact_name || ''">{{ lead.contact_name }}</td>
                 <td :title="lead.position || ''">{{ lead.position }}</td>
                 <td :title="lead.phone || lead.wechat || ''">{{ lead.phone || lead.wechat }}</td>
-                <td><span class="pill" :class="lead.lead_level">{{ lead.lead_level }}</span></td>
+                <td><span class="pill" :class="lead.lead_level">{{ statusLabel(leadLevelLabels, lead.lead_level) }}</span></td>
+                <td>{{ statusLabel(viewStatusLabels, lead.view_status) }}</td>
+                <td>
+                  <span class="status-badge" :class="`status-${lead.processing_status}`" :title="lead.processing_note || ''">
+                    {{ statusLabel(processingStatusLabels, lead.processing_status) }}
+                  </span>
+                </td>
+                <td>{{ statusLabel(exportStatusLabels, lead.export_status) }}</td>
                 <td>{{ formatDateTime(lead.last_activity_at || lead.updated_at || lead.created_at) }}</td>
                 <td v-if="canDeleteLeads" class="lead-row-actions">
                   <button class="icon-button danger-icon-button" type="button" :title="`删除线索：${lead.company_name || lead.id}`" @click.stop="deleteLead(lead)"><Trash2 :size="16" /></button>
                 </td>
               </tr>
               <tr v-if="!pagedLeads.length">
-                <td :colspan="canDeleteLeads ? 8 : 7" class="empty-cell">暂无符合条件的线索</td>
+                <td :colspan="canDeleteLeads ? 11 : 10" class="empty-cell">暂无符合条件的线索</td>
               </tr>
             </tbody>
           </table>
@@ -368,6 +524,35 @@ onBeforeUnmount(clearReportPolling);
             <button class="secondary" :disabled="leadPage >= leadTotalPages" @click="goLeadPage(1)">下一页 <ChevronRight :size="16" /></button>
           </div>
         </footer>
+
+        <section v-if="exportBatchPanelOpen" class="export-batches-panel">
+          <header>
+            <h3>导出历史</h3>
+            <span>每次「一键导出未导出客户」成功后自动保存批次，可随时按历史批次重新下载。</span>
+          </header>
+          <div class="leads-table-wrap">
+            <table class="leads-table export-batches-table">
+              <thead><tr><th>批次</th><th>导出时间</th><th>客户数</th><th>操作人</th><th>说明</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="batch in exportBatches" :key="batch.id">
+                  <td>#{{ batch.id }}</td>
+                  <td>{{ formatDateTime(batch.created_at) }}</td>
+                  <td>{{ batch.rows_count }}</td>
+                  <td>{{ batch.exported_by || "-" }}</td>
+                  <td :title="batch.file_name || ''">{{ batch.filters_summary || "-" }}</td>
+                  <td>
+                    <button class="secondary compact-button" type="button" :disabled="batchDownloading !== null" @click="downloadBatch(batch)">
+                      {{ batchDownloading === batch.id ? "下载中..." : "重新下载" }}
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="!exportBatches.length">
+                  <td colspan="6" class="empty-cell">暂无导出批次</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section v-else class="table-section lead-detail-page" aria-labelledby="lead-detail-title">
@@ -397,9 +582,36 @@ onBeforeUnmount(clearReportPolling);
         <div v-if="leadDetailLoading" class="loading">客户详情加载中...</div>
         <div v-else-if="selectedLeadDetail" class="lead-detail-body">
           <section class="detail-block">
+            <h3>处理进度</h3>
+            <div class="process-status-grid">
+              <article :class="processStatusTone(selectedLeadDetail.report?.research_status)">
+                <span>企业情报</span>
+                <strong>{{ processStatusLabel(selectedLeadDetail.report?.research_status) }}</strong>
+                <small>耗时 {{ formatElapsed(selectedLeadDetail.report?.research_elapsed_seconds) }}</small>
+              </article>
+              <article :class="processStatusTone(selectedLeadDetail.report?.status)">
+                <span>AI 报告</span>
+                <strong>{{ processStatusLabel(selectedLeadDetail.report?.status) }}</strong>
+                <small>耗时 {{ formatElapsed(selectedLeadDetail.report?.generation_elapsed_seconds) }}</small>
+              </article>
+              <article :class="processStatusTone(selectedLeadDetail.report?.pdf_status)">
+                <span>报告文件</span>
+                <strong>{{ processStatusLabel(selectedLeadDetail.report?.pdf_status) }}</strong>
+                <small>耗时 {{ formatElapsed(selectedLeadDetail.report?.pdf_elapsed_seconds) }}</small>
+              </article>
+              <article :class="processStatusTone(selectedLeadDetail.delivery?.status)">
+                <span>邮件发送</span>
+                <strong>{{ processStatusLabel(selectedLeadDetail.delivery?.status) }}</strong>
+                <small>耗时 {{ formatElapsed(selectedLeadDetail.delivery?.elapsed_seconds) }}</small>
+                <small v-if="selectedLeadDetail.delivery?.queue_position">队列第 {{ selectedLeadDetail.delivery.queue_position }} 位</small>
+              </article>
+            </div>
+          </section>
+          <section class="detail-block">
             <h3>基本信息</h3>
             <div class="detail-grid">
               <div><span>公司</span><strong>{{ selectedLeadDetail.lead.company_name || "-" }}</strong></div>
+              <div><span>所在城市</span><strong>{{ selectedLeadDetail.lead.city || "-" }}</strong></div>
               <div><span>行业</span><strong>{{ selectedLeadDetail.lead.industry || "-" }}</strong></div>
               <div><span>规模</span><strong>{{ selectedLeadDetail.lead.company_size || "-" }}</strong></div>
               <div><span>年营收</span><strong>{{ selectedLeadDetail.lead.annual_revenue || "-" }}</strong></div>
@@ -409,8 +621,12 @@ onBeforeUnmount(clearReportPolling);
               <div><span>邮箱</span><strong>{{ selectedLeadDetail.lead.email || "-" }}</strong></div>
               <div><span>微信</span><strong>{{ selectedLeadDetail.lead.wechat || "-" }}</strong></div>
               <div><span>来源</span><strong :title="selectedLeadDetail.lead.source_code || ''">{{ sourceLabel(selectedLeadDetail.lead.source_code) }}</strong></div>
+              <div><span>首次查看</span><strong>{{ selectedLeadDetail.lead.first_viewed_at ? formatDateTime(selectedLeadDetail.lead.first_viewed_at) : "-" }}</strong></div>
+              <div><span>首次查看人</span><strong>{{ selectedLeadDetail.lead.first_viewed_by || "-" }}</strong></div>
+              <div><span>首次导出</span><strong>{{ selectedLeadDetail.lead.first_exported_at ? formatDateTime(selectedLeadDetail.lead.first_exported_at) : "-" }}</strong></div>
+              <div><span>最近导出</span><strong>{{ selectedLeadDetail.lead.last_exported_at ? formatDateTime(selectedLeadDetail.lead.last_exported_at) : "-" }}</strong></div>
             </div>
-            <div class="diagnostic-email-editor">
+            <div v-if="adminUser?.role === 'admin'" class="diagnostic-email-editor">
               <div>
                 <span>诊断邮箱投递</span>
                 <p v-if="selectedLeadDetail.delivery?.status === 'failed'">最近发送失败：{{ selectedLeadDetail.delivery.last_error || "未知原因" }}</p>
@@ -434,7 +650,7 @@ onBeforeUnmount(clearReportPolling);
           <section class="detail-block">
             <h3>诊断结果</h3>
             <div class="detail-score-grid">
-              <div><span>线索等级</span><strong><span class="pill" :class="selectedLeadDetail.lead.lead_level">{{ selectedLeadDetail.lead.lead_level }}</span></strong></div>
+              <div><span>线索等级</span><strong><span class="pill" :class="selectedLeadDetail.lead.lead_level">{{ statusLabel(leadLevelLabels, selectedLeadDetail.lead.lead_level) }}</span></strong></div>
               <div><span>总分</span><strong>{{ selectedLeadDetail.submission?.total_score ?? "-" }}/{{ selectedLeadDetail.submission?.max_score ?? "-" }}</strong></div>
               <div><span>得分率</span><strong>{{ selectedLeadScoreRate }}</strong></div>
               <div><span>提交时间</span><strong>{{ selectedLeadDetail.submission?.submitted_at ? formatDateTime(selectedLeadDetail.submission.submitted_at) : "-" }}</strong></div>
@@ -453,12 +669,24 @@ onBeforeUnmount(clearReportPolling);
               <div class="company-research-sections">
                 <div v-for="[key, label] in companyResearchSections" :key="key" class="company-research-item">
                   <span>{{ label }}</span>
-                  <p>{{ selectedLeadDetail.report.company_research[key] || "公开渠道未披露" }}</p>
+                  <div v-if="researchSubsections(selectedLeadDetail.report.company_research[key]).length" class="company-research-subsections">
+                    <div v-for="item in researchSubsections(selectedLeadDetail.report.company_research[key])" :key="item.title" class="company-research-subsection">
+                      <strong>{{ item.title }}</strong>
+                      <p>{{ item.content }}</p>
+                    </div>
+                  </div>
+                  <p v-else>{{ researchLegacyText(selectedLeadDetail.report.company_research[key]) || "公开渠道未披露" }}</p>
                 </div>
               </div>
               <div class="detail-demand">
                 <span>AI 综合分析</span>
-                <p>{{ selectedLeadDetail.report.company_research.analysis || "暂无" }}</p>
+                <div v-if="researchSubsections(selectedLeadDetail.report.company_research.analysis).length" class="company-research-subsections">
+                  <div v-for="item in researchSubsections(selectedLeadDetail.report.company_research.analysis)" :key="item.title" class="company-research-subsection">
+                    <strong>{{ item.title }}</strong>
+                    <p>{{ item.content }}</p>
+                  </div>
+                </div>
+                <p v-else>{{ researchLegacyText(selectedLeadDetail.report.company_research.analysis) || "暂无" }}</p>
               </div>
               <div v-if="selectedLeadDetail.report.company_research.sources?.length" class="company-research-sources">
                 <span>信息来源</span>
@@ -469,13 +697,22 @@ onBeforeUnmount(clearReportPolling);
                 </ul>
               </div>
             </div>
-            <p v-else class="empty-detail">尚未生成企业情报（需在 API 配置中启用联网搜索）。</p>
+            <p v-else class="empty-detail">尚未生成企业情报，请查看当前检索状态或等待系统自动重试。</p>
             <div v-if="selectedLeadDetail.report?.generation_error" class="generation-error-banner">
               <strong>生成提示：</strong>{{ selectedLeadDetail.report.generation_error }}
             </div>
-            <div v-if="!selectedLeadDetail.report?.company_research" class="research-trigger">
+            <div v-if="adminUser?.role === 'admin'" class="research-trigger">
               <button class="secondary" type="button" :disabled="researchRunning" @click="runLeadResearch">
-                {{ researchRunning ? "正在联网检索企业信息…" : "手动搜索企业信息" }}
+                {{ researchRunning ? "正在联网检索企业信息…" : selectedLeadDetail.report?.company_research ? "重新检索企业信息" : "手动搜索企业信息" }}
+              </button>
+              <button
+                v-if="selectedLeadDetail.report?.research_status === 'generated' && (selectedLeadDetail.report?.status === 'failed' || selectedLeadDetail.delivery?.status === 'failed' || !selectedLeadDetail.delivery)"
+                class="primary"
+                type="button"
+                :disabled="resumeDeliveryRunning"
+                @click="resumeReportDelivery"
+              >
+                {{ resumeDeliveryRunning ? "正在重新入队…" : "继续生成报告并发送" }}
               </button>
             </div>
           </section>
@@ -525,8 +762,7 @@ onBeforeUnmount(clearReportPolling);
           <header class="module-block-header">
             <h2>搜索配置<span>公司情报检索</span></h2>
           </header>
-          <p class="gateway-hint">启用后，客户提交问卷时系统会自动检索目标公司的公开信息，生成 7 维情报与 AI 分析。选择 DeepSeek 联网搜索时由 DeepSeek 一步完成检索与情报生成（需填入 DeepSeek API Key）。API Key 以掩码显示，输入框留空表示保留原值；切换服务商或使用自定义服务商时必须填写新的 Key，不能沿用旧 Key。</p>
-          <label class="gateway-check"><input v-model="searchForm.search_enabled" type="checkbox" /> 启用联网搜索</label>
+          <p class="gateway-hint">客户提交问卷后，系统会自动检索目标公司的公开信息并生成企业情报与 AI 分析。DeepSeek 联网搜索默认共用服务器 .env 中的 API Key；如在此单独填写 Key，则优先使用后台配置。API Key 以掩码显示，输入框留空表示保留原值。</p>
           <div class="question-bank-number-grid">
             <label>搜索服务商
               <select v-model="searchForm.search_provider">
@@ -540,7 +776,7 @@ onBeforeUnmount(clearReportPolling);
             <p v-else class="gateway-hint gateway-official-url">接口地址：{{ searchProviderOfficialUrls[searchForm.search_provider] }}（官方固定，不可修改）</p>
           </div>
           <label v-if="searchForm.search_provider === 'deepseek'">检索模型<input v-model="searchForm.search_model" placeholder="留空使用默认 deepseek-v4-flash" /></label>
-          <label>搜索 API Key<input v-model="searchForm.search_api_key" type="password" :placeholder="gatewayConfig?.search_api_key ? `当前：${gatewayConfig.search_api_key}` : '请输入 API Key'" /></label>
+          <label>搜索 API Key<input v-model="searchForm.search_api_key" type="password" :placeholder="gatewayConfig?.search_api_key ? `当前：${gatewayConfig.search_api_key}` : searchForm.search_provider === 'deepseek' ? '使用服务器 DEEPSEEK_API_KEY' : '请输入 API Key'" /></label>
           <div class="question-bank-number-grid">
             <label>超时（秒）<input v-model.number="searchForm.search_timeout_seconds" type="number" min="3" max="120" /></label>
             <label>最大结果数<input v-model.number="searchForm.search_max_results" type="number" min="1" max="50" /></label>
@@ -725,6 +961,7 @@ onBeforeUnmount(clearReportPolling);
 
       <form v-if="step === 'info'" class="form-grid" @submit.prevent="submitLead">
         <label>公司名称<input v-model="leadForm.company_name" required /></label>
+        <label>所在城市<input v-model="leadForm.city" required placeholder="例如：广东省深圳市" /></label>
         <label>行业<select v-model="leadForm.industry"><option v-for="item in industries" :key="item">{{ item }}</option></select></label>
         <label>企业规模<select v-model="leadForm.company_size"><option v-for="item in companySizes" :key="item">{{ item }}</option></select></label>
         <label>年营收<select v-model="leadForm.annual_revenue"><option v-for="item in revenues" :key="item">{{ item }}</option></select></label>
@@ -829,16 +1066,13 @@ onBeforeUnmount(clearReportPolling);
         <h2>正在生成您的诊断报告</h2>
         <p>报告完成后会自动为您打开，同时发送至：</p>
         <strong>{{ leadForm.email }}</strong>
-        <div v-if="deliveryStatus === 'queued' && queuePosition" class="queue-status">
+        <div v-if="reportFailure" class="queue-status" role="status">
           <span class="queue-dot" aria-hidden="true"></span>
-          已进入生成队列，当前排在第 {{ queuePosition }} 位
+          {{ reportFailure }}
         </div>
-        <div v-else-if="deliveryStatus === 'processing'" class="queue-status">
-          <span class="queue-dot" aria-hidden="true"></span>
-          正在联网检索企业信息并生成报告…
-        </div>
-        <p v-if="reportWaitSeconds < 20" class="submitted-note">正在进行 AI 分析，请保持当前页面开启。</p>
-        <p v-else class="submitted-note">当前访问量较高，报告仍会在生成完成后发送至邮箱；您可以稍后通过邮件中的链接查看。</p>
+        <p v-if="!reportFailure && reportWaitSeconds < 60" class="submitted-note">正在进行 AI 分析，请保持当前页面开启。</p>
+        <p v-else-if="!reportFailure" class="submitted-note">您的诊断资料已收到，报告正在进一步审核，完成后将发送至您的邮箱。</p>
+        <button class="secondary" type="button" @click="restartFlow">重新填写</button>
       </section>
 
       <section v-if="step === 'report' && activeReport" class="report-view">

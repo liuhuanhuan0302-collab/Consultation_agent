@@ -1,0 +1,55 @@
+version: 1
+run_id: backend-architecture-hardening-20260822
+single_writer: true
+nodes:
+  I-000:
+    title: Freeze baseline and activate leases
+    milestone: M0
+    depends_on: []
+    status: accepted
+  I-001:
+    title: Verify configuration startup gates
+    milestone: M0
+    depends_on: [I-000]
+    status: accepted
+  I-040:
+    title: Bind company research to trusted sources
+    milestone: M1
+    depends_on: [I-001]
+    status: accepted
+  I-010:
+    title: Extract questionnaire submission workflow
+    milestone: M2
+    depends_on: [I-001]
+    status: accepted
+  I-020:
+    title: Extract admin lead workflows
+    milestone: M2
+    depends_on: [I-010]
+    status: accepted
+  I-030:
+    title: Add authorization behavior matrix
+    milestone: M3
+    depends_on: [I-020]
+    status: accepted
+  I-050:
+    title: Synchronize architecture and project documentation
+    milestone: M3
+    depends_on: [I-040, I-010, I-020, I-030]
+    status: accepted
+  I-060:
+    title: Independent final regression
+    milestone: M4
+    depends_on: [I-040, I-010, I-020, I-030, I-050]
+    status: pending
+  I-070:
+    title: Replace deprecated UTC timestamp in public lead limit
+    milestone: M4
+    depends_on: [I-050]
+    status: accepted
+scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-060]
+optional_nodes:
+  I-041:
+    title: Read-only historical research audit
+    depends_on: [I-040]
+    human_gate: true

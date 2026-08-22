@@ -5,7 +5,7 @@
   1. 取低分维度 → 匹配案例
   2. 组装结构化 payload
   3. 调用 DeepSeek API 生成报告建议
-  4. AI 成功 → generated 状态；失败 → fallback 状态，用模板渲染 HTML
+  4. AI 成功且模板完整 → generated；失败或不完整 → failed，转人工审核
   5. 写入 Report 表 + Recommendation 关联表
 """
 
@@ -25,7 +25,10 @@ from app.database import SessionLocal
 from app.models import AiConversationMessage, CaseStudy, CompanyLead, DimensionScore, Report, ReportStatus
 from app.repositories.case_repo import get_active_cases_by_modules, get_active_generic_cases
 from app.service.api_gateway_service import effective_llm_override
+from app.service.company_research import research_section_text
+from app.service.report_content import sanitize_report_content
 from app.service.report_analysis import build_core_findings, build_question_scores
+from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 _report_generation_semaphore: asyncio.Semaphore | None = None
@@ -145,7 +148,7 @@ def condense_research(research: dict | None) -> str | None:
         "challenges": "可能遇到的挑战",
         "ai_opportunities": "AI 机会",
     }
-    parts = [f"{label}：{str(research.get(key) or '未披露').strip()[:120]}" for key, label in labels.items()]
+    parts = [f"{label}：{(research_section_text(research.get(key)) or '未披露')[:240]}" for key, label in labels.items()]
     return "；".join(parts)
 
 
@@ -162,12 +165,14 @@ def build_report_payload(lead: CompanyLead, report: Report, dimensions: list[Dim
     return {
         "company": {
             "name": lead.company_name,
+            "city": lead.city,
             "industry": lead.industry,
             "size": lead.company_size,
             "position": lead.position,
             "ai_focus": lead.ai_focus,
             "public_info": public_info,
         },
+        "company_research": research or {},
         "score": {
             "total": submission.total_score,
             "max_score": submission.max_score,
@@ -259,7 +264,6 @@ def render_fallback_html(payload: dict, model_text: str | None = None) -> str:
         f"""
         <section class="report-case">
           <h4>{html.escape(case["title"])}</h4>
-          <p><strong>适用方向：</strong>{html.escape(case["function_area"])} · {html.escape(case["priority_tag"])}</p>
           <p>{html.escape(case["description"])}</p>
           <p><strong>预期收益：</strong>{html.escape(case["expected_benefit"])}</p>
         </section>
@@ -276,7 +280,7 @@ def render_fallback_html(payload: dict, model_text: str | None = None) -> str:
         </section>
         """
 
-    return f"""
+    return sanitize_report_content(f"""
     <article class="report-document">
       <section>
         <h2>一、执行摘要</h2>
@@ -305,14 +309,23 @@ def render_fallback_html(payload: dict, model_text: str | None = None) -> str:
         </ol>
       </section>
     </article>
-    """
+    """)
 
 
 def build_deepseek_prompt(payload: dict) -> str:
     """构建 DeepSeek API 提示词：注入答题得分 + 客户诉求 + 公司联网公开信息，要求输出 6 部分结构化 JSON。"""
     dimensions = payload.get("dimensions") or []
+    validation_feedback = payload.get("_report_validation_feedback") or []
+    correction_notice = ""
+    if validation_feedback:
+        correction_notice = (
+            "\n上一次输出未通过完整性校验，请修正以下问题后重新输出完整 JSON：\n- "
+            + "\n- ".join(str(item) for item in validation_feedback)
+            + "\n"
+        )
     return f"""
 你是一名资深的企业 AI 原生转型咨询顾问。请基于以下结构化诊断数据（答题得分、客户诉求、公司联网公开信息），生成一份高价值诊断报告。
+{correction_notice}
 
 报告必须包含 6 个部分，严格按以下 JSON 结构输出（只输出 JSON，不要 markdown 代码块，不要任何解释文字）：
 
@@ -337,7 +350,7 @@ def build_deepseek_prompt(payload: dict) -> str:
     {{"priority": "P0", "topic": "议题", "question": "现场核心问题", "deliverable": "必须产出", "nature": "必须形成共识/必须形成选择/必须明确机制"}}
   ],
   "ai_scenarios": [
-    {{"name": "场景名", "direction": "适用方向（如：质量管理·升维战）", "description": "场景描述", "benefit": "预期收益"}}
+    {{"name": "场景名", "description": "场景描述", "benefit": "预期收益"}}
   ],
   "management_actions": ["行动建议1（带时间要求）", "行动建议2", "行动建议3"]
 }}
@@ -350,7 +363,7 @@ def build_deepseek_prompt(payload: dict) -> str:
    - 最后一行 evidence_rows 的 interpretation 应落到“对该公司业务意味着什么 + 具体建议”。
 3. key_contradictions 3-5 条，体现“强项与弱项之间的张力”，证据必须来自得分对比（如某维度高 vs 另一维度低）。
 4. workshop_topics 4-6 条，用 P0/P1/P2 分级，议题要贴合该公司所处行业与当前现状。
-5. ai_scenarios 3-5 个，必须结合下方“公司公开信息”中的行业、业务、挑战与 AI 机会，给出贴合该公司实际的具体场景，不得套用无关行业案例。
+5. ai_scenarios 3-5 个，必须结合下方“公司公开信息”中的行业、业务、挑战与 AI 机会，给出贴合该公司实际的具体场景，不得套用无关行业案例。不要生成“适用方向”字段，不要使用“攻坚战”“闪电战”“升维战”等战法判断。
 6. management_actions 3-5 条，按“先核验事实、再确定试点、最后建立复盘机制”的时间顺序。
 7. 不得编造客户未填写的答题数据；不得改写评分数字和得分率。
 8. 语气专业、务实，面向 CEO 和高管可读。
@@ -381,19 +394,69 @@ def parse_structured_report(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _report_data_usable(data: dict | None) -> bool:
-    """结构化报告至少包含一个非空部分才算可用。"""
+REPORT_SECTION_KEYS = [
+    "executive_summary",
+    "dimension_analysis",
+    "key_contradictions",
+    "workshop_topics",
+    "ai_scenarios",
+    "management_actions",
+]
+
+
+class ReportContentInvalidError(RuntimeError):
+    """AI 报告三次生成后仍不符合固定模板，必须转人工审核。"""
+
+
+def report_data_validation_errors(data: dict | None, payload: dict) -> list[str]:
+    """校验六个模板部分均有内容，且逐维分析覆盖全部有效模块。"""
     if not data:
-        return False
-    keys = [
+        return ["未返回可解析的 JSON 报告"]
+    errors: list[str] = []
+    labels = {
+        "executive_summary": "执行摘要",
+        "dimension_analysis": "能力成熟度逐维分析",
+        "key_contradictions": "关键矛盾与核心诊断",
+        "workshop_topics": "工作坊议题地图",
+        "ai_scenarios": "优先 AI 应用场景",
+        "management_actions": "管理层行动建议",
+    }
+    for key in REPORT_SECTION_KEYS:
+        value = data.get(key)
+        if not isinstance(value, list) or not value:
+            errors.append(f"缺少或未填写：{labels[key]}")
+
+    expected_codes = {
+        str(item.get("module_code") or "").strip().upper()
+        for item in (payload.get("dimensions") or [])
+        if str(item.get("module_code") or "").strip()
+    }
+    actual_codes = {
+        str(item.get("module_code") or "").strip().upper()
+        for item in (data.get("dimension_analysis") or [])
+        if isinstance(item, dict) and str(item.get("module_code") or "").strip()
+    }
+    missing_codes = sorted(expected_codes - actual_codes)
+    if missing_codes:
+        errors.append(f"逐维分析未覆盖模块：{', '.join(missing_codes)}")
+    return errors
+
+
+def _report_data_usable(data: dict | None, payload: dict | None = None) -> bool:
+    """兼容旧调用；新流程必须通过完整模板校验。"""
+    if payload is None:
+        if not data:
+            return False
+        keys = [
         "executive_summary",
         "dimension_analysis",
         "key_contradictions",
         "workshop_topics",
         "ai_scenarios",
         "management_actions",
-    ]
-    return any(bool(data.get(key)) for key in keys)
+        ]
+        return all(bool(data.get(key)) for key in keys)
+    return not report_data_validation_errors(data, payload)
 
 
 def render_structured_report_html(payload: dict, data: dict) -> str:
@@ -517,7 +580,6 @@ def render_structured_report_html(payload: dict, data: dict) -> str:
         f"""
         <section class="report-case">
           <h4>{html.escape(str(item.get("name") or ""))}</h4>
-          <p><strong>适用方向：</strong>{html.escape(str(item.get("direction") or ""))}</p>
           <p>{html.escape(str(item.get("description") or ""))}</p>
           <p><strong>预期收益：</strong>{html.escape(str(item.get("benefit") or ""))}</p>
         </section>
@@ -531,7 +593,7 @@ def render_structured_report_html(payload: dict, data: dict) -> str:
         for action in (data.get("management_actions") or [])
     )
 
-    return f"""
+    return sanitize_report_content(f"""
     <article class="report-document">
       <section>
         <h2>一、执行摘要</h2>
@@ -569,7 +631,7 @@ def render_structured_report_html(payload: dict, data: dict) -> str:
         <ol class="report-action-list">{action_items}</ol>
       </section>
     </article>
-    """
+    """)
 
 
 async def call_deepseek(payload: dict, llm_override: "LlmGatewayOverride | None" = None) -> str | None:
@@ -579,11 +641,17 @@ async def call_deepseek(payload: dict, llm_override: "LlmGatewayOverride | None"
     温度 0.35 保证输出稳定可控。无可用 Key 时返回 None，触发 fallback 渲染。
     """
     settings = get_settings()
-    api_key = llm_override.api_key if llm_override else None
-    base_url = (llm_override.base_url if llm_override else None) or settings.deepseek_base_url
+    override_key = llm_override.api_key if llm_override else None
+    override_base = (llm_override.base_url or "").strip() if llm_override else ""
+    base_url = override_base or settings.deepseek_base_url
     model = (llm_override.model if llm_override else None) or settings.deepseek_model
-    if not api_key:
-        api_key = settings.deepseek_api_key
+    # 安全约束：网关保存了自定义 LLM 地址、但网关 Key 不可用（如加密密钥
+    # 轮换后无法解密）时，禁止把 .env 的 DeepSeek Key 发往该地址。
+    if override_base and not override_key:
+        raise RuntimeError(
+            "LLM 接口地址已配置但网关 Key 无法解密（加密密钥可能已轮换），请在后台重新填写 LLM API Key 并保存"
+        )
+    api_key = override_key or settings.deepseek_api_key
     if not api_key:
         return None
     # 报告提示词大、要求结构化输出，生成耗时较长，用更宽松的超时避免读取响应体超时
@@ -634,41 +702,70 @@ async def generate_report_content(db: Session, report: Report) -> Report:
     """
     报告生成编排——核心链路。
     ① 取低分维度 + 行业匹配案例
-    ② 调用 DeepSeek（失败则降级到模板）
+    ② 调用 DeepSeek，并对固定模板完整性最多校验重试 3 次
     ③ 渲染 HTML 写入 report
     ④ 创建案例推荐关联记录
     """
     lead = report.submission.lead
+    report.generation_started_at = utc_now()
+    report.generation_completed_at = None
     dimensions = list(report.submission.dimension_scores)
     cases = select_recommendations(db, lead, dimensions)
     research = _load_company_research(report)
     payload = build_report_payload(lead, report, dimensions, cases, research=research)
     model_text = None
     report_data: dict | None = None
-    status = ReportStatus.fallback.value
-    error = None
-    db.query(AiConversationMessage).filter(AiConversationMessage.report_id == report.id).delete()
-    prompt = build_deepseek_prompt(payload)
-    store_ai_message(db, report, "user", prompt, metadata={"payload": payload})
-    try:
-        model_text = await call_deepseek(payload, llm_override=effective_llm_override(db))
-        if model_text:
-            status = ReportStatus.generated.value
-            store_ai_message(db, report, "assistant", model_text)
-            report_data = parse_structured_report(model_text)
-    except Exception as exc:
-        # 报告生成失败不阻塞客户提交流程，降级到模板报告
-        error = str(exc)
+    validation_errors: list[str] = []
+    generation_errors: list[str] = []
+    db.query(AiConversationMessage).filter(
+        AiConversationMessage.report_id == report.id,
+        AiConversationMessage.purpose == "report_advisor",
+    ).delete()
+    llm_override = effective_llm_override(db)
+    for attempt in range(1, 4):
+        attempt_payload = dict(payload)
+        if validation_errors:
+            attempt_payload["_report_validation_feedback"] = validation_errors
+        prompt = build_deepseek_prompt(attempt_payload)
+        store_ai_message(
+            db,
+            report,
+            "user",
+            prompt,
+            metadata={"payload": payload, "attempt": attempt, "validation_feedback": validation_errors},
+        )
+        try:
+            model_text = await call_deepseek(attempt_payload, llm_override=llm_override)
+        except Exception as exc:  # noqa: BLE001
+            generation_errors.append(f"第 {attempt} 次调用失败：{exc}")
+            validation_errors = [generation_errors[-1]]
+            continue
+        if not model_text:
+            generation_errors.append(f"第 {attempt} 次调用未返回内容")
+            validation_errors = [generation_errors[-1]]
+            continue
+        store_ai_message(db, report, "assistant", model_text, metadata={"attempt": attempt})
+        candidate = parse_structured_report(model_text)
+        validation_errors = report_data_validation_errors(candidate, payload)
+        if not validation_errors:
+            report_data = candidate
+            break
+        generation_errors.append(f"第 {attempt} 次结构不完整：{'；'.join(validation_errors)}")
 
-    report.status = status
     report.summary_json = json.dumps(payload, ensure_ascii=False)
     report.model_name = get_settings().deepseek_model
-    report.generation_error = error
-    if _report_data_usable(report_data):
-        html = render_structured_report_html(payload, report_data)
-    else:
-        html = render_fallback_html(payload, model_text=model_text)
-    report.html_content = html
+    if report_data is None:
+        report.status = ReportStatus.failed.value
+        report.generation_completed_at = utc_now()
+        report.html_content = ""
+        report.generation_error = "报告内容不完整，待人工审核：" + "；".join(generation_errors[-3:])
+        db.flush()
+        return report
+
+    report.status = ReportStatus.generated.value
+    report.generation_completed_at = utc_now()
+    report.generation_error = None
+    report.html_content = render_structured_report_html(payload, report_data)
     report.recommendations.clear()
     db.flush()
 

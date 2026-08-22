@@ -8,7 +8,6 @@ from app.schemas.base import UTCResponseModel
 
 
 class GatewayConfigRead(UTCResponseModel):
-    search_enabled: bool
     search_provider: str
     search_api_key: str
     search_base_url: str | None = None
@@ -24,8 +23,7 @@ class GatewayConfigRead(UTCResponseModel):
 
 
 class SearchConfigUpdate(BaseModel):
-    search_enabled: bool = True
-    search_provider: str = "bocha"
+    search_provider: str = "deepseek"
     search_api_key: str = ""
     search_base_url: str | None = None
     search_timeout_seconds: int = Field(default=15, ge=3, le=120)
@@ -41,7 +39,7 @@ class LlmConfigUpdate(BaseModel):
 
 class SearchTestRequest(BaseModel):
     query: str = Field(min_length=2, max_length=200)
-    search_provider: str = "bocha"
+    search_provider: str = "deepseek"
     search_api_key: str = ""
     search_base_url: str | None = None
     search_timeout_seconds: int = Field(default=15, ge=3, le=120)

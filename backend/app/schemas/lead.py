@@ -21,6 +21,7 @@ class SessionResponse(BaseModel):
 class LeadCreate(BaseModel):
     session_token: str | None = Field(default=None, description="匿名会话令牌")
     company_name: str = Field(min_length=1, max_length=255, description="企业全称")
+    city: str = Field(min_length=1, max_length=120, description="企业所在城市")
     industry: str = Field(min_length=1, max_length=120, description="所属行业")
     company_size: str = Field(min_length=1, max_length=80, description="企业规模")
     annual_revenue: str | None = Field(default=None, description="年营收区间")
@@ -49,6 +50,7 @@ class LeadResponse(UTCResponseModel):
     id: int
     session_token: str
     company_name: str | None
+    city: str | None
     industry: str | None
     company_size: str | None
     annual_revenue: str | None
@@ -65,6 +67,23 @@ class LeadResponse(UTCResponseModel):
     created_at: datetime
     updated_at: datetime
     last_activity_at: datetime | None = Field(default=None, description="最近处理时间")
+    view_status: str = Field(default="unviewed", description="查看状态：unviewed/viewed")
+    first_viewed_at: datetime | None = Field(default=None, description="首次查看时间")
+    first_viewed_by: str | None = Field(default=None, description="首次查看人")
+    processing_status: str = Field(default="pending", description="处理状态：pending/processing/manual_review/completed")
+    processing_note: str | None = Field(default=None, description="待人工处理的具体原因")
+    export_status: str = Field(default="unexported", description="导出状态：unexported/exported")
+    first_exported_at: datetime | None = Field(default=None, description="首次导出时间")
+    last_exported_at: datetime | None = Field(default=None, description="最近导出时间")
+
+
+class ExportBatchResponse(UTCResponseModel):
+    id: int
+    created_at: datetime
+    rows_count: int
+    file_name: str
+    exported_by: str | None = Field(default=None, description="操作人")
+    filters_summary: str | None = Field(default=None, description="筛选条件摘要")
 
 
 class LeadCreatedResponse(BaseModel):

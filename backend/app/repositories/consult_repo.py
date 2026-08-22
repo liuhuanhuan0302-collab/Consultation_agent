@@ -1,12 +1,37 @@
+from datetime import date, datetime, time, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import CompanyLead, DiagnosisSubmission, DimensionScore, QuestionAnswer, Report, ReportStatus, TrackingEvent
-from app.utils.time_utils import to_china_time
+from app.utils.time_utils import CHINA_TIMEZONE, to_china_time
 
 
 def get_lead_by_session(db: Session, session_token: str) -> CompanyLead | None:
     return db.query(CompanyLead).filter(CompanyLead.session_token == session_token).first()
+
+
+def _day_range(created_from: date | None, created_to: date | None) -> tuple[datetime | None, datetime | None]:
+    """把中国本地日期的起止转换为无时区 UTC 边界，与库内 UTC 存储对齐。
+
+    前端日期筛选按展示的中国时间选择，而 created_at 以无时区 UTC 入库，
+    直接用 UTC 日界会漏掉中国当日 0-8 点（UTC 前一天）的记录。
+    """
+    start = None
+    end = None
+    if created_from:
+        start = (
+            datetime.combine(created_from, time.min, tzinfo=CHINA_TIMEZONE)
+            .astimezone(timezone.utc)
+            .replace(tzinfo=None)
+        )
+    if created_to:
+        end = (
+            datetime.combine(created_to, time.max, tzinfo=CHINA_TIMEZONE)
+            .astimezone(timezone.utc)
+            .replace(tzinfo=None)
+        )
+    return start, end
 
 
 def list_leads(
@@ -14,6 +39,12 @@ def list_leads(
     industry: str | None = None,
     lead_level: str | None = None,
     source_code: str | None = None,
+    created_from: date | None = None,
+    created_to: date | None = None,
+    view_status: str | None = None,
+    processing_status: str | None = None,
+    export_status: str | None = None,
+    sort: str = "newest",
     limit: int = 500,
 ) -> list[CompanyLead]:
     latest_completed_at = (
@@ -30,7 +61,19 @@ def list_leads(
         query = query.filter(CompanyLead.lead_level == lead_level)
     if source_code:
         query = query.filter(CompanyLead.source_code == source_code)
-    rows = query.add_columns(last_activity_at.label("last_activity_at")).order_by(last_activity_at.desc()).limit(limit).all()
+    start, end = _day_range(created_from, created_to)
+    if start:
+        query = query.filter(CompanyLead.created_at >= start)
+    if end:
+        query = query.filter(CompanyLead.created_at <= end)
+    if view_status:
+        query = query.filter(CompanyLead.view_status == view_status)
+    if processing_status:
+        query = query.filter(CompanyLead.processing_status == processing_status)
+    if export_status:
+        query = query.filter(CompanyLead.export_status == export_status)
+    ordering = last_activity_at.asc() if sort == "oldest" else last_activity_at.desc()
+    rows = query.add_columns(last_activity_at.label("last_activity_at")).order_by(ordering).limit(limit).all()
     leads: list[CompanyLead] = []
     for lead, activity_at in rows:
         lead.last_activity_at = activity_at
@@ -163,4 +206,8 @@ def delete_lead_cascade(db: Session, lead: CompanyLead) -> None:
     db.query(AiConversationMessage).filter(AiConversationMessage.lead_id == lead.id).delete()
     db.query(ReportDeliveryJob).filter(ReportDeliveryJob.lead_id == lead.id).delete()
     db.query(TrackingEvent).filter(TrackingEvent.lead_id == lead.id).delete()
+    # 删除线索时清掉批次明细；批次 CSV 快照保留，历史批次仍可重新下载。
+    from app.models import ExportBatchLead
+
+    db.query(ExportBatchLead).filter(ExportBatchLead.lead_id == lead.id).delete()
     db.delete(lead)

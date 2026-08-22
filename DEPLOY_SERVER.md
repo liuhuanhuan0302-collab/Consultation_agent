@@ -113,6 +113,12 @@ cd /opt/consultation_agent
 docker compose up -d --build
 ```
 
+后端容器会在 API 启动前自动执行 Alembic 数据库迁移。更新生产环境前请先备份数据库：
+
+```bash
+docker compose exec mysql sh -lc 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > consultation_agent_backup.sql
+```
+
 当前服务器由系统 Nginx 对外监听 80 端口，Docker 前端只监听本机 `127.0.0.1:8080`。首次部署或更新后，还需要启用项目内的 Nginx 转发配置：
 
 ```bash
@@ -120,12 +126,6 @@ sudo cp deploy/nginx/consultation-agent.conf /etc/nginx/sites-available/consulta
 sudo ln -sfn /etc/nginx/sites-available/consultation-agent /etc/nginx/sites-enabled/consultation-agent
 sudo nginx -t
 sudo systemctl reload nginx
-```
-
-第一次启动后初始化数据库：
-
-```bash
-docker compose exec backend python scripts/init_db.py
 ```
 
 查看状态：
@@ -180,7 +180,67 @@ curl http://127.0.0.1/api/health
 curl http://你的服务器公网IP/api/health
 ```
 
-## 7. 二维码地址
+## 7. 启动隔离测试环境（与生产共用 MySQL 服务）
+
+测试环境与生产环境共用同一个 MySQL 容器，但使用独立数据库、独立数据库账号、独立管理员和独立后端数据卷。测试数据不会进入生产库。
+
+先创建配置：
+
+```bash
+cd /opt/consultation_agent
+cp .env.staging.example .env.staging
+nano .env.staging
+```
+
+至少修改以下内容：
+
+```env
+STAGING_MYSQL_PASSWORD=测试库专用强密码
+DATABASE_URL=mysql+pymysql://consult_agent_test:同上密码@mysql:3306/consultation_agent_test?charset=utf8mb4
+SECRET_KEY=测试环境专用随机长字符串
+INITIAL_ADMIN_EMAIL=测试后台管理员邮箱
+INITIAL_ADMIN_PASSWORD=测试后台管理员强密码
+DEEPSEEK_API_KEY=你的DeepSeek密钥
+PUBLIC_WEB_BASE_URL=http://你的服务器公网IP:8081/diagnosis
+CORS_ORIGINS=http://你的服务器公网IP:8081
+SMTP_RECIPIENT_ALLOWLIST=你的测试收件邮箱
+```
+
+`DATABASE_URL` 的数据库名必须以 `_test` 或 `_staging` 结尾，否则测试后端会拒绝启动。测试数据库密码请只使用字母、数字和 `_ . -`，避免 URL 转义错误。
+
+首次启动或修改测试数据库账号后执行：
+
+```bash
+docker compose --profile staging run --rm mysql_staging_init
+docker compose --profile staging up -d --build backend_staging report_worker_staging frontend_staging
+```
+
+测试地址：
+
+```text
+官网：http://你的服务器公网IP:8081/
+诊断：http://你的服务器公网IP:8081/diagnosis/
+后台：http://你的服务器公网IP:8081/diagnosis/admin
+```
+
+阿里云安全组只允许你的办公公网 IP 访问 TCP `8081`，不要向所有来源开放测试环境。
+
+查看测试环境状态和日志：
+
+```bash
+docker compose --profile staging ps
+docker compose --profile staging logs -f backend_staging report_worker_staging
+```
+
+清空测试数据时只删除测试数据库，禁止操作生产数据库 `consultation_agent`：
+
+```bash
+docker compose exec mysql sh -lc 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS consultation_agent_test;"'
+docker compose --profile staging run --rm mysql_staging_init
+docker compose --profile staging restart backend_staging report_worker_staging
+```
+
+## 8. 二维码地址
 
 域名尚未完成 ICP 备案时，请先使用服务器公网 IP：
 
@@ -214,7 +274,7 @@ docker compose up -d
 
 官网二维码通过 `/api/public/channels/OFFICIAL_WEBSITE/qr` 实时生成；完成上述配置并重建前端容器后，会自动使用新的地址，无需替换静态图片。
 
-## 8. 重要提醒
+## 9. 重要提醒
 
 当前使用 IP 临时访问时，安全组只开放：
 

@@ -28,6 +28,8 @@ def test_fallback_report_does_not_invent_unknown_company_facts():
     assert "测试公司" in html
     assert "120/260" in html
     assert "智能客服知识库" in html
+    assert "适用方向" not in html
+    assert "闪电战" not in html
     assert "融资" not in html
 
 

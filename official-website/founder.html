@@ -225,12 +225,12 @@
     </footer>
 
     <script>
-      // 本地开发：诊断系统运行在 localhost:5180；生产环境为同域 /diagnosis/
+      // 本地开发：诊断系统运行在 localhost:5173；生产环境为同域 /diagnosis/
       (function () {
         var isLocalDev = /^localhost$|^127\.0\.0\.1$/.test(location.hostname) && location.port === "5174";
         if (!isLocalDev) return;
         document.querySelectorAll('a[href^="/diagnosis/"]').forEach(function (anchor) {
-          anchor.href = "http://localhost:5180" + anchor.getAttribute("href");
+          anchor.href = "http://localhost:5173" + anchor.getAttribute("href");
         });
       })();
     </script>

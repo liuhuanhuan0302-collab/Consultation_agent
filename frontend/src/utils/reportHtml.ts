@@ -90,6 +90,9 @@ export function sanitizeReportHtml(value: string): string {
   const allowedTags = new Set(["ARTICLE", "SECTION", "H2", "H3", "H4", "P", "STRONG", "EM", "UL", "OL", "LI", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DIV", "SPAN", "BR", "A"]);
   const container = document.createElement("div");
   container.innerHTML = value;
+  for (const paragraph of Array.from(container.querySelectorAll("p"))) {
+    if ((paragraph.textContent || "").trim().startsWith("适用方向")) paragraph.remove();
+  }
   for (const element of Array.from(container.querySelectorAll("*"))) {
     if (!allowedTags.has(element.tagName)) {
       element.replaceWith(document.createTextNode(element.textContent || ""));
@@ -98,6 +101,13 @@ export function sanitizeReportHtml(value: string): string {
     for (const attribute of Array.from(element.attributes)) {
       const isSafeLink = element.tagName === "A" && attribute.name === "href" && /^https?:\/\//i.test(attribute.value);
       if (attribute.name !== "class" && !isSafeLink) element.removeAttribute(attribute.name);
+    }
+  }
+  for (const node of Array.from(container.querySelectorAll("article, section, div, p, li, td, span"))) {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE && child.textContent) {
+        child.textContent = child.textContent.replace(/攻坚战|闪电战|升维战/g, "");
+      }
     }
   }
   return container.innerHTML;

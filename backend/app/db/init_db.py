@@ -2,14 +2,18 @@
 
 from sqlalchemy import inspect, text
 
+from app.core.config import get_settings
 from app.db.database import Base, SessionLocal, engine
 
 
 def init_db() -> None:
     from app import models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
-    ensure_schema_upgrades()
+    if get_settings().environment == "development":
+        # Local development remains easy to bootstrap. Production schema is
+        # migrated before Uvicorn starts by scripts/migrate_database.py.
+        Base.metadata.create_all(bind=engine)
+        ensure_schema_upgrades()
 
     from app.service.api_gateway_service import migrate_gateway_secrets
 

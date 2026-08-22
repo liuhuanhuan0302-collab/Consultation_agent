@@ -3,16 +3,25 @@
 import { computed, reactive, ref, watch, type Component } from "vue";
 import { BookOpen, BriefcaseBusiness, FileText, KeyRound, LayoutDashboard, QrCode, Users } from "lucide-vue-next";
 
-import { ApiError, api } from "../api";
-import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, User } from "../types";
-import { formatDateTime, isValidEmail, parseApiDate } from "../utils/format";
+import { ApiError, api, type LeadQueryParams } from "../api";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, CompanyResearchValue, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, User } from "../types";
+import { isValidEmail } from "../utils/format";
 import { normalizeReportHtml } from "../utils/reportHtml";
-import { adminNotice, error } from "./feedback";
+import { clearToasts, pushToast } from "./feedback";
 
 export type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels" | "gateway";
 type LeadSortOrder = "newest" | "oldest";
 
-export const companyResearchSections: [keyof CompanyResearch, string][] = [
+type CompanyResearchSectionKey =
+  | "company_overview"
+  | "revenue_scale"
+  | "products"
+  | "industry_characteristics"
+  | "development_status"
+  | "challenges"
+  | "ai_opportunities";
+
+export const companyResearchSections: [CompanyResearchSectionKey, string][] = [
   ["company_overview", "公司介绍"],
   ["revenue_scale", "营收规模"],
   ["products", "产品"],
@@ -21,6 +30,15 @@ export const companyResearchSections: [keyof CompanyResearch, string][] = [
   ["challenges", "可能遇到的挑战"],
   ["ai_opportunities", "AI 能帮他们做什么"],
 ];
+
+export function researchSubsections(value: CompanyResearchValue | undefined) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => item && typeof item.title === "string" && typeof item.content === "string");
+}
+
+export function researchLegacyText(value: CompanyResearchValue | undefined) {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 /** 内置搜索服务商的官方固定地址（不可自定义）。 */
 export const searchProviderOfficialUrls: Record<string, string> = {
@@ -39,6 +57,13 @@ export function useAdmin() {
   const leads = ref<Lead[]>([]);
   const leadSortOrder = ref<LeadSortOrder>("newest");
   const leadIndustryFilter = ref("全部行业");
+  const leadCreatedFrom = ref("");
+  const leadCreatedTo = ref("");
+  const leadLevelFilter = ref("");
+  const leadViewFilter = ref("");
+  const leadProcessingFilter = ref("");
+  const leadExportFilter = ref("");
+  const leadIndustrySource = ref<Lead[]>([]); // 未筛选全量列表，仅用于构建行业下拉选项
   const leadPageSize = ref(10);
   const leadPage = ref(1);
   const leadRuleDialogOpen = ref(false);
@@ -46,6 +71,7 @@ export function useAdmin() {
   const leadDetailLoading = ref(false);
   const selectedLeadDetail = ref<LeadDetail | null>(null);
   const researchRunning = ref(false);
+  const resumeDeliveryRunning = ref(false);
   let researchPollTimer: number | null = null;
   const diagnosticEmailDraft = ref("");
   const diagnosticEmailUpdating = ref(false);
@@ -56,6 +82,10 @@ export function useAdmin() {
   const users = ref<User[]>([]);
   const channels = ref<ChannelSource[]>([]);
   const leadsExporting = ref(false);
+  const leadsBatchExporting = ref(false);
+  const exportBatches = ref<ExportBatch[]>([]);
+  const exportBatchPanelOpen = ref(false);
+  const batchDownloading = ref<number | null>(null);
   const leadWordExporting = ref(false);
   const gatewayConfig = ref<GatewayConfig | null>(null);
   const searchSaving = ref(false);
@@ -63,8 +93,7 @@ export function useAdmin() {
   const llmSaving = ref(false);
   const llmTesting = ref(false);
   const searchForm = reactive({
-    search_enabled: false,
-    search_provider: "bocha" as "bocha" | "serpapi" | "deepseek" | "custom",
+    search_provider: "deepseek" as "bocha" | "serpapi" | "deepseek" | "custom",
     search_api_key: "",
     search_base_url: "",
     search_timeout_seconds: 15,
@@ -115,7 +144,7 @@ export function useAdmin() {
     cases.value = [];
     users.value = [];
     channels.value = [];
-    if (message) error.value = message;
+    if (message) pushToast("severe", message);
   }
 
   function handleAdminRequestError(err: unknown): boolean {
@@ -128,13 +157,12 @@ export function useAdmin() {
   }
 
   async function loginAdmin() {
-    error.value = "";
     try {
       await api.login(adminEmail.value, adminPassword.value);
       adminToken.value = true;
       await loadAdminShell();
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "登录失败";
+      pushToast("error", err instanceof Error ? err.message : "登录失败");
     }
   }
 
@@ -145,19 +173,27 @@ export function useAdmin() {
       await loadAdminTab("overview");
     } catch (err) {
       if (!handleAdminRequestError(err)) {
-        error.value = err instanceof Error ? err.message : "加载后台失败";
+        pushToast("error", err instanceof Error ? err.message : "加载后台失败");
       }
     }
   }
 
   async function loadAdminTab(tab: AdminTab) {
+    // 页面切换时清理旧提示；同页签内部刷新（如删除线索后重载）保留刚产生的提示。
+    const tabChanged = adminTab.value !== tab;
+    if (tabChanged) clearToasts();
     try {
       if (tab !== "leads") closeLeadDetail();
       adminTab.value = tab;
       if (tab === "overview") analytics.value = await api.analytics();
       if (tab === "leads") {
-        const [leadRows, channelRows] = await Promise.all([api.leads(), api.channels().catch(() => [])]);
+        const [leadRows, industryRows, channelRows] = await Promise.all([
+          api.leads(leadQueryParams()),
+          api.leads({}).catch(() => [] as Lead[]),
+          api.channels().catch(() => []),
+        ]);
         leads.value = leadRows;
+        leadIndustrySource.value = industryRows;
         channels.value = channelRows;
         resetLeadPage();
       }
@@ -168,7 +204,33 @@ export function useAdmin() {
       if (tab === "gateway") await loadGatewayTab();
     } catch (err) {
       if (!handleAdminRequestError(err)) {
-        error.value = err instanceof Error ? err.message : "加载后台数据失败";
+        pushToast("error", err instanceof Error ? err.message : "加载后台数据失败");
+      }
+    }
+  }
+
+  /** 当前筛选条件 → 后端查询参数（列表/导出共用）。 */
+  function leadQueryParams(): LeadQueryParams {
+    return {
+      industry: leadIndustryFilter.value === "全部行业" ? "" : leadIndustryFilter.value,
+      lead_level: leadLevelFilter.value,
+      created_from: leadCreatedFrom.value,
+      created_to: leadCreatedTo.value,
+      view_status: leadViewFilter.value,
+      processing_status: leadProcessingFilter.value,
+      export_status: leadExportFilter.value,
+      sort: leadSortOrder.value,
+    };
+  }
+
+  /** 按当前筛选条件从服务端重新拉取线索列表（排序由后端完成）。 */
+  async function loadLeads() {
+    try {
+      leads.value = await api.leads(leadQueryParams());
+      resetLeadPage();
+    } catch (err) {
+      if (!handleAdminRequestError(err)) {
+        pushToast("error", err instanceof Error ? err.message : "加载线索失败");
       }
     }
   }
@@ -185,16 +247,21 @@ export function useAdmin() {
     leadDetailOpen.value = true;
     leadDetailLoading.value = true;
     selectedLeadDetail.value = null;
-    error.value = "";
     try {
       selectedLeadDetail.value = await api.leadDetail(lead.id);
       diagnosticEmailDraft.value = selectedLeadDetail.value.lead.email || "";
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "加载客户详情失败";
+      pushToast("error", err instanceof Error ? err.message : "加载客户详情失败");
       leadDetailOpen.value = false;
     } finally {
       leadDetailLoading.value = false;
     }
+  }
+
+  /** 严重提示的「查看客户」入口：按 id 直达详情（列表中可能已被筛选排除）。 */
+  function openLeadDetailById(leadId: number) {
+    const lead = leads.value.find((item) => item.id === leadId) || ({ id: leadId } as Lead);
+    void openLeadDetail(lead);
   }
 
   function closeLeadDetail() {
@@ -203,6 +270,7 @@ export function useAdmin() {
     diagnosticEmailDraft.value = "";
     clearResearchPolling();
     researchRunning.value = false;
+    clearToasts();
   }
 
   function clearResearchPolling() {
@@ -216,11 +284,10 @@ export function useAdmin() {
     const detail = selectedLeadDetail.value;
     if (!detail || researchRunning.value) return;
     researchRunning.value = true;
-    error.value = "";
-    adminNotice.value = "";
     try {
-      const result = await api.triggerLeadResearch(detail.lead.id);
-      adminNotice.value = result.message || "已开始检索";
+      const force = Boolean(detail.report?.company_research);
+      const result = await api.triggerLeadResearch(detail.lead.id, force);
+      pushToast("success", result.message || "已开始检索");
       if (result.status === "already_generated") {
         selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
         researchRunning.value = false;
@@ -233,24 +300,56 @@ export function useAdmin() {
         try {
           const refreshed = await api.leadDetail(detail.lead.id);
           selectedLeadDetail.value = refreshed;
-          if (refreshed.report?.company_research || attempts >= 60) {
+          const researchStatus = refreshed.report?.research_status;
+          if (["generated", "failed", "review"].includes(researchStatus || "") || attempts >= 60) {
             clearResearchPolling();
             researchRunning.value = false;
-            if (refreshed.report?.company_research) {
-              adminNotice.value = "企业情报与 AI 分析已生成";
+            if (researchStatus === "generated" && refreshed.report?.company_research) {
+              // 情报已生成，但报告/投递任务此前失败时提示继续生成，而不是显示流程已完成
+              const blocked =
+                refreshed.report.status === "failed" ||
+                refreshed.delivery?.status === "failed" ||
+                !refreshed.delivery;
+              if (blocked) {
+                pushToast("severe", "企业情报已生成，但 AI 报告/邮件投递任务此前失败：请点击「继续生成报告并发送」完成后续流程", {
+                  leadId: detail.lead.id,
+                  leadName: detail.lead.company_name,
+                });
+              } else {
+                pushToast("success", "企业情报与 AI 分析已生成");
+              }
             } else {
-              error.value = "检索未生成结果：可能公司名称过短或公开信息不足，可稍后重试";
+              pushToast("severe", "检索未生成结果：可能公司名称过短或公开信息不足，可稍后重试", {
+                leadId: detail.lead.id,
+                leadName: detail.lead.company_name,
+              });
             }
           }
         } catch (err) {
           clearResearchPolling();
           researchRunning.value = false;
-          error.value = err instanceof Error ? err.message : "刷新检索结果失败";
+          pushToast("error", err instanceof Error ? err.message : "刷新检索结果失败");
         }
       }, 3000);
     } catch (err) {
       researchRunning.value = false;
-      error.value = err instanceof Error ? err.message : "触发检索失败";
+      pushToast("error", err instanceof Error ? err.message : "触发检索失败");
+    }
+  }
+
+  async function resumeReportDelivery() {
+    const detail = selectedLeadDetail.value;
+    if (!detail || resumeDeliveryRunning.value) return;
+    resumeDeliveryRunning.value = true;
+    try {
+      const result = await api.resumeReportDelivery(detail.lead.id);
+      pushToast("success", result.message || "已继续生成报告并发送");
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "继续生成报告失败");
+    } finally {
+      resumeDeliveryRunning.value = false;
     }
   }
 
@@ -259,19 +358,18 @@ export function useAdmin() {
     const email = diagnosticEmailDraft.value.trim();
     if (!detail) return;
     if (!isValidEmail(email)) {
-      error.value = "请输入正确的诊断邮箱地址";
+      pushToast("error", "请输入正确的诊断邮箱地址");
       return;
     }
     diagnosticEmailUpdating.value = true;
-    error.value = "";
     try {
       const result = await api.updateLeadDiagnosticEmail(detail.lead.id, email);
-      adminNotice.value = result.message;
+      pushToast("success", result.message);
       selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
       diagnosticEmailDraft.value = selectedLeadDetail.value.lead.email || email;
       await loadAdminTab("leads");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "更正诊断邮箱失败";
+      pushToast("error", err instanceof Error ? err.message : "更正诊断邮箱失败");
     } finally {
       diagnosticEmailUpdating.value = false;
     }
@@ -279,14 +377,58 @@ export function useAdmin() {
 
   async function exportLeads() {
     leadsExporting.value = true;
-    error.value = "";
     try {
-      await api.leadsExport();
-      adminNotice.value = "线索列表已导出";
+      await api.leadsExport(leadQueryParams());
+      pushToast("success", "线索已按当前筛选条件导出");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "导出线索失败";
+      pushToast("error", err instanceof Error ? err.message : "导出线索失败");
     } finally {
       leadsExporting.value = false;
+    }
+  }
+
+  /** 一键导出全部未导出客户：成功后自动下载批次文件并刷新列表导出状态。 */
+  async function exportUnexported() {
+    if (leadsBatchExporting.value) return;
+    leadsBatchExporting.value = true;
+    try {
+      const result = await api.exportUnexportedLeads();
+      pushToast("success", result.message);
+      if (result.batch_id !== null) {
+        await api.downloadExportBatch(result.batch_id);
+        await loadLeadBatches();
+        await loadLeads();
+      }
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "一键导出失败");
+    } finally {
+      leadsBatchExporting.value = false;
+    }
+  }
+
+  async function loadLeadBatches() {
+    try {
+      exportBatches.value = await api.exportBatches();
+    } catch {
+      // 批次历史加载失败不打断主流程
+    }
+  }
+
+  function toggleExportBatches() {
+    exportBatchPanelOpen.value = !exportBatchPanelOpen.value;
+    if (exportBatchPanelOpen.value) void loadLeadBatches();
+  }
+
+  async function downloadBatch(batch: ExportBatch) {
+    if (batchDownloading.value !== null) return;
+    batchDownloading.value = batch.id;
+    try {
+      await api.downloadExportBatch(batch.id);
+      pushToast("success", `批次 #${batch.id}（${batch.rows_count} 位客户）已重新下载`);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "重新下载批次失败");
+    } finally {
+      batchDownloading.value = null;
     }
   }
 
@@ -294,11 +436,11 @@ export function useAdmin() {
     const detail = selectedLeadDetail.value;
     if (!detail) return;
     leadWordExporting.value = true;
-    error.value = "";
     try {
       await api.leadWordExport(detail.lead.id);
+      pushToast("success", "客户档案已导出");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "导出客户档案失败";
+      pushToast("error", err instanceof Error ? err.message : "导出客户档案失败");
     } finally {
       leadWordExporting.value = false;
     }
@@ -309,14 +451,13 @@ export function useAdmin() {
     if (!window.confirm(`确定删除线索 ${name} 吗？\n将同时删除该客户的企业信息、全部答题、评分与诊断报告，且无法恢复。删除后该客户可重新填写。`)) return;
     const leadId = lead.id;
     const wasDetailOpen = selectedLeadDetail.value?.lead.id === leadId;
-    error.value = "";
     try {
       const result = await api.deleteLead(leadId);
-      adminNotice.value = result.message;
       if (wasDetailOpen) closeLeadDetail();
+      pushToast("success", result.message);
       await loadAdminTab("leads");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "删除线索失败";
+      pushToast("error", err instanceof Error ? err.message : "删除线索失败");
     }
   }
 
@@ -335,8 +476,6 @@ export function useAdmin() {
   }
 
   async function createChannel() {
-    error.value = "";
-    adminNotice.value = "";
     try {
       const created = await api.createChannel({ ...channelForm, is_active: true });
       const index = channels.value.findIndex((item) => item.id === created.id);
@@ -346,37 +485,33 @@ export function useAdmin() {
       channelForm.code = "";
       channelForm.name = "";
       channelForm.description = "";
-      adminNotice.value = "渠道二维码已生成";
+      pushToast("success", "渠道二维码已生成");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "渠道创建失败";
+      pushToast("error", err instanceof Error ? err.message : "渠道创建失败");
     }
   }
 
   async function createUser() {
-    error.value = "";
-    adminNotice.value = "";
     try {
       const created = await api.createUser({ ...userForm });
       users.value = [...users.value, created];
       userForm.email = "";
       userForm.name = "";
       userForm.password = "";
-      adminNotice.value = "账号已创建，可使用邮箱和初始密码登录";
+      pushToast("success", "账号已创建，可使用邮箱和初始密码登录");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "账号创建失败";
+      pushToast("error", err instanceof Error ? err.message : "账号创建失败");
     }
   }
 
   async function deleteChannel(item: ChannelSource) {
     if (!window.confirm(`确定删除“${item.name}”的二维码吗？删除后链接将立即失效。`)) return;
-    error.value = "";
-    adminNotice.value = "";
     try {
       await api.deleteChannel(item.id);
       channels.value = channels.value.filter((channel) => channel.id !== item.id);
-      adminNotice.value = "渠道二维码已删除";
+      pushToast("success", "渠道二维码已删除");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "删除二维码失败";
+      pushToast("error", err instanceof Error ? err.message : "删除二维码失败");
     }
   }
 
@@ -428,7 +563,6 @@ export function useAdmin() {
 
   async function createQuestionModule() {
     questionBankSaving.value = true;
-    error.value = "";
     try {
       await api.createQuestionModule({
         code: nextQuestionModuleCode(),
@@ -439,10 +573,10 @@ export function useAdmin() {
         is_active: true
       });
       questionBankDialog.value = null;
-      adminNotice.value = "题库已新增";
       await loadAdminTab("questions");
+      pushToast("success", "题库已新增");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "新增题库失败";
+      pushToast("error", err instanceof Error ? err.message : "新增题库失败");
     } finally {
       questionBankSaving.value = false;
     }
@@ -450,7 +584,6 @@ export function useAdmin() {
 
   async function createQuestion() {
     questionBankSaving.value = true;
-    error.value = "";
     try {
       await api.createQuestion({
         ...questionForm,
@@ -460,10 +593,10 @@ export function useAdmin() {
         is_active: true
       });
       questionBankDialog.value = null;
-      adminNotice.value = "题目已新增";
       await loadAdminTab("questions");
+      pushToast("success", "题目已新增");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "新增题目失败";
+      pushToast("error", err instanceof Error ? err.message : "新增题目失败");
     } finally {
       questionBankSaving.value = false;
     }
@@ -471,25 +604,23 @@ export function useAdmin() {
 
   async function deleteQuestionModule(module: QuestionModule) {
     if (!window.confirm(`确定删除题库“${module.name}”吗？新客户将不再看到其中题目，历史报告不会受影响。`)) return;
-    error.value = "";
     try {
       const result = await api.deleteQuestionModule(module.id);
-      adminNotice.value = result.message;
       await loadAdminTab("questions");
+      pushToast("success", result.message);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "删除题库失败";
+      pushToast("error", err instanceof Error ? err.message : "删除题库失败");
     }
   }
 
   async function deleteQuestion(question: Question) {
     if (!window.confirm(`确定删除“${question.code}”吗？新客户将不再看到此题，历史报告不会受影响。`)) return;
-    error.value = "";
     try {
       const result = await api.deleteQuestion(question.id);
-      adminNotice.value = result.message;
       await loadAdminTab("questions");
+      pushToast("success", result.message);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "删除题目失败";
+      pushToast("error", err instanceof Error ? err.message : "删除题目失败");
     }
   }
 
@@ -501,7 +632,6 @@ export function useAdmin() {
   function hydrateGatewayForm() {
     const config = gatewayConfig.value;
     if (!config) return;
-    searchForm.search_enabled = config.search_enabled;
     searchForm.search_provider = config.search_provider;
     searchForm.search_base_url = config.search_base_url || "";
     searchForm.search_timeout_seconds = config.search_timeout_seconds;
@@ -523,28 +653,22 @@ export function useAdmin() {
     const providerChanged = Boolean(savedProvider && savedProvider !== searchForm.search_provider);
 
     // 与后端一致的本地预检，避免发出必然失败的请求
-    if ((providerChanged || searchForm.search_provider === "custom") && !formKey) {
-      error.value = providerChanged ? "切换搜索服务商时必须填写新的搜索 API Key（不能沿用旧 Key）" : "自定义服务商必须填写新的搜索 API Key（不能沿用旧 Key）";
+    if ((providerChanged || searchForm.search_provider === "custom") && searchForm.search_provider !== "deepseek" && !formKey) {
+      pushToast("error", providerChanged ? "切换搜索服务商时必须填写新的搜索 API Key（不能沿用旧 Key）" : "自定义服务商必须填写新的搜索 API Key（不能沿用旧 Key）");
       return;
     }
     const baseUrl = searchForm.search_base_url.trim();
     if (searchForm.search_provider === "custom" && (!baseUrl || !baseUrl.startsWith("https://"))) {
-      error.value = "自定义服务商必须填写 https:// 开头的接口地址";
+      pushToast("error", "自定义服务商必须填写 https:// 开头的接口地址");
       return;
     }
-    if (searchForm.search_enabled && !formKey && !gatewayConfig.value?.search_api_key) {
-      error.value = "已启用联网搜索，请先填写搜索 API Key";
-      return;
-    }
-
     searchSaving.value = true;
-    error.value = "";
     try {
       gatewayConfig.value = await api.saveSearchConfig({ ...searchForm });
       hydrateGatewayForm();
-      adminNotice.value = "搜索配置已保存";
+      pushToast("success", "搜索配置已保存");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "保存搜索配置失败";
+      pushToast("error", err instanceof Error ? err.message : "保存搜索配置失败");
     } finally {
       searchSaving.value = false;
     }
@@ -556,22 +680,21 @@ export function useAdmin() {
     const llmBaseChanged = llmBase !== savedLlmBase;
 
     if (llmBase && !llmBase.startsWith("https://")) {
-      error.value = "LLM 接口地址必须以 https:// 开头";
+      pushToast("error", "LLM 接口地址必须以 https:// 开头");
       return;
     }
     if (llmBaseChanged && !llmForm.llm_api_key.trim()) {
-      error.value = "更换 LLM 接口地址时必须同时填写新的 LLM API Key（不能沿用旧 Key）";
+      pushToast("error", "更换 LLM 接口地址时必须同时填写新的 LLM API Key（不能沿用旧 Key）");
       return;
     }
 
     llmSaving.value = true;
-    error.value = "";
     try {
       gatewayConfig.value = await api.saveLlmConfig({ ...llmForm });
       hydrateGatewayForm();
-      adminNotice.value = "大模型配置已保存";
+      pushToast("success", "大模型配置已保存");
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "保存大模型配置失败";
+      pushToast("error", err instanceof Error ? err.message : "保存大模型配置失败");
     } finally {
       llmSaving.value = false;
     }
@@ -594,17 +717,16 @@ export function useAdmin() {
         searchTestResult.value = { ok: false, text: "自定义服务商需要填写 https:// 开头的接口地址" };
         return;
       }
-    } else if (providerChanged && !formKey) {
+    } else if (providerChanged && searchForm.search_provider !== "deepseek" && !formKey) {
       searchTestResult.value = { ok: false, text: "切换搜索服务商时必须填写新的搜索 API Key（不能沿用旧 Key）" };
       return;
-    } else if (!formKey && !gatewayConfig.value?.search_api_key) {
-      searchTestResult.value = { ok: false, text: "请先填写搜索 API Key（输入框留空时会使用已保存的 Key，当前两者都为空）" };
+    } else if (searchForm.search_provider !== "deepseek" && !formKey && !gatewayConfig.value?.search_api_key) {
+      searchTestResult.value = { ok: false, text: "请先填写搜索 API Key（DeepSeek 可共用服务器 .env 中的 Key）" };
       return;
     }
 
     searchTesting.value = true;
     searchTestResult.value = null;
-    error.value = "";
     try {
       const result = await api.testSearchConfig(query, {
         search_provider: searchForm.search_provider,
@@ -645,7 +767,6 @@ export function useAdmin() {
 
     llmTesting.value = true;
     llmTestResult.value = null;
-    error.value = "";
     try {
       const result = await api.testLlmConfig({
         llm_api_key: llmForm.llm_api_key.trim(),
@@ -668,23 +789,15 @@ export function useAdmin() {
   const canDeleteLeads = computed(() => adminUser.value?.role === "admin");
   const canManageQuestionBank = computed(() => ["admin", "operator"].includes(adminUser.value?.role || ""));
   const canManageGateway = computed(() => adminUser.value?.role === "admin");
-  const leadIndustryOptions = computed(() => ["全部行业", ...Array.from(new Set(leads.value.map((lead) => lead.industry || "未填写").filter(Boolean)))]);
+  const leadIndustryOptions = computed(() => ["全部行业", ...Array.from(new Set(leadIndustrySource.value.map((lead) => lead.industry || "未填写").filter(Boolean)))]);
 
   function sourceLabel(code: string | null | undefined): string {
     if (!code) return "未标记来源";
     return channels.value.find((channel) => channel.code === code)?.name || code;
   }
 
-  const filteredLeads = computed(() => {
-    return leads.value
-      .filter((lead) => leadIndustryFilter.value === "全部行业" || (lead.industry || "未填写") === leadIndustryFilter.value)
-      .sort((a, b) => {
-        const bTime = b.last_activity_at || b.updated_at || b.created_at;
-        const aTime = a.last_activity_at || a.updated_at || a.created_at;
-        const diff = parseApiDate(bTime).getTime() - parseApiDate(aTime).getTime();
-        return leadSortOrder.value === "newest" ? diff : -diff;
-      });
-  });
+  // 筛选与排序均由服务端完成，前端只负责分页切片
+  const filteredLeads = computed(() => leads.value);
   const leadTotalPages = computed(() => Math.max(1, Math.ceil(filteredLeads.value.length / leadPageSize.value)));
   const pagedLeads = computed(() => {
     const safePage = Math.min(leadPage.value, leadTotalPages.value);
@@ -700,7 +813,15 @@ export function useAdmin() {
     return rate === null || rate === undefined ? "-" : `${Math.round(rate * 100)}%`;
   });
 
-  watch([leadSortOrder, leadIndustryFilter, leadPageSize], resetLeadPage);
+  // 任一筛选条件变化 → 重新从服务端拉取并回到第一页
+  watch(
+    [leadSortOrder, leadIndustryFilter, leadLevelFilter, leadCreatedFrom, leadCreatedTo, leadViewFilter, leadProcessingFilter, leadExportFilter],
+    () => {
+      void loadLeads();
+    }
+  );
+
+  watch(leadPageSize, resetLeadPage);
 
   watch(leadTotalPages, (totalPages) => {
     if (leadPage.value > totalPages) {
@@ -719,6 +840,12 @@ export function useAdmin() {
     leads,
     leadSortOrder,
     leadIndustryFilter,
+    leadCreatedFrom,
+    leadCreatedTo,
+    leadLevelFilter,
+    leadViewFilter,
+    leadProcessingFilter,
+    leadExportFilter,
     leadPageSize,
     leadPage,
     leadRuleDialogOpen,
@@ -726,6 +853,7 @@ export function useAdmin() {
     leadDetailLoading,
     selectedLeadDetail,
     researchRunning,
+    resumeDeliveryRunning,
     diagnosticEmailDraft,
     diagnosticEmailUpdating,
     adminQuestions,
@@ -738,6 +866,10 @@ export function useAdmin() {
     userForm,
     channelForm,
     leadsExporting,
+    leadsBatchExporting,
+    exportBatches,
+    exportBatchPanelOpen,
+    batchDownloading,
     leadWordExporting,
     questionModuleForm,
     questionForm,
@@ -769,10 +901,15 @@ export function useAdmin() {
     resetLeadPage,
     goLeadPage,
     openLeadDetail,
+    openLeadDetailById,
     closeLeadDetail,
     runLeadResearch,
+    resumeReportDelivery,
     updateLeadDiagnosticEmail,
     exportLeads,
+    exportUnexported,
+    toggleExportBatches,
+    downloadBatch,
     exportLeadWord,
     deleteLead,
     logoutAdmin,
