@@ -267,6 +267,14 @@ first attempt; only after `max_attempts` does the job go to manual review.
   `failed` and goes to manual review instead of being delivered.
 - The PDF delivery gate requires every customer section to be present and
   rejects corrupt or abnormally small PDFs before emailing.
+- Container PDF rendering: Docker services run with `no-new-privileges` and
+  `cap_drop: ALL`, so the Chromium sandbox cannot start (setuid helper is
+  blocked and Ubuntu 23.10+ hosts restrict unprivileged user namespaces).
+  `PDF_BROWSER_NO_SANDBOX=true` (set in `docker-compose.yml` and the
+  production/staging env examples) launches Chromium with `--no-sandbox` —
+  the container is the isolation boundary and the rendered HTML is generated
+  and sanitized by the system itself. Outside containers the flag stays off
+  and a sandbox startup failure reports an actionable hint.
 - Public endpoints redact internal failure details and return the same generic
   message the frontend shows; detailed errors are visible in the admin system
   only.
