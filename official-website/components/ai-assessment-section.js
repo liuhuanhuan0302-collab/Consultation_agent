@@ -1,4 +1,4 @@
-import { DIAGNOSIS_URL } from "../config.js";
+import { DIAGNOSIS_URL, QR_CODE_URL } from "../config.js";
 
 /** @param {ParentNode} root */
 function setAssessmentLinks(root) {
@@ -21,6 +21,8 @@ export function AssessmentReportCard(root) {
 /** @param {HTMLElement} root */
 export function QRCodeCard(root) {
   setAssessmentLinks(root);
+  const image = root.querySelector("[data-assessment-qr]");
+  if (image instanceof HTMLImageElement) image.src = QR_CODE_URL;
 }
 
 /** @param {HTMLElement} root */

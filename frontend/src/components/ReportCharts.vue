@@ -49,6 +49,7 @@ watch(
 const sorted = computed(() =>
   [...props.dimensions].sort((a, b) => a.score_rate - b.score_rate),
 );
+const orderedDimensions = computed(() => [...props.dimensions]);
 
 function shortName(name: string): string {
   const colon = name.indexOf("：");
@@ -145,15 +146,15 @@ const barOptions = {
 };
 
 const radarData = computed(() => ({
-  labels: sorted.value.map((d) => shortName(d.module_name)),
+  labels: orderedDimensions.value.map((d) => shortName(d.module_name)),
   datasets: [
     {
       label: "得分率",
-      data: sorted.value.map((d) => Math.round(d.score_rate * 100)),
+      data: orderedDimensions.value.map((d) => Math.round(d.score_rate * 100)),
       backgroundColor: "rgba(59,130,246,0.15)",
       borderColor: "#3b82f6",
       borderWidth: 2.5,
-      pointBackgroundColor: sorted.value.map((d) => rateColor(d.score_rate)),
+      pointBackgroundColor: orderedDimensions.value.map((d) => rateColor(d.score_rate)),
       pointBorderColor: "#ffffff",
       pointBorderWidth: 2,
       pointRadius: 5,
@@ -179,7 +180,7 @@ const radarOptions = {
         title: () => "",
         label: (ctx: TooltipItem<"radar">) => {
           const label = String(ctx.label ?? "");
-          const dim = sorted.value.find((d) => shortName(d.module_name) === label);
+          const dim = orderedDimensions.value.find((d) => shortName(d.module_name) === label);
           const name = dim?.module_name ?? label;
           return `${name}: ${tooltipValue(ctx.raw)}% · ${dim ? rateLabel(dim.score_rate) : ""}`;
         },
@@ -206,6 +207,7 @@ const radarOptions = {
     },
   },
 };
+
 </script>
 
 <template>
@@ -213,8 +215,8 @@ const radarOptions = {
     <div class="chart-card chart-card--bar">
       <div class="chart-card-header">
         <span class="card-accent"></span>
-        <h3>十维能力成熟度排行</h3>
-        <p class="chart-card-sub">各维度得分率从低到高排列，快速定位薄弱环节</p>
+        <h3>能力成熟度排行</h3>
+        <p class="chart-card-sub">当前启用维度的得分率从低到高排列，快速定位薄弱环节</p>
       </div>
       <div class="chart-wrapper">
         <Bar :key="'bar-' + chartKey" :data="barData" :options="barOptions" />
@@ -224,7 +226,7 @@ const radarOptions = {
       <div class="chart-card-header">
         <span class="card-accent" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)"></span>
         <h3>AI 转型能力雷达图</h3>
-        <p class="chart-card-sub">十维度全景扫描，面积越大代表能力越均衡</p>
+        <p class="chart-card-sub">按当前启用维度生成，面积越大代表能力越均衡</p>
       </div>
       <div class="chart-wrapper">
         <Radar :key="'radar-' + chartKey" :data="radarData" :options="radarOptions" />

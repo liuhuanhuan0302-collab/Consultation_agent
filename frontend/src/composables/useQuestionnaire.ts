@@ -2,7 +2,7 @@
 
 import { computed, nextTick, reactive, ref, watch, type Ref } from "vue";
 
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import type { QuestionModule, Report, ScoreResponse } from "../types";
 import { appUrl, sourceFromUrl } from "../utils/appPaths";
 import { isValidEmail } from "../utils/format";
@@ -11,6 +11,7 @@ import { error } from "./feedback";
 export type Step = "intro" | "info" | "questionnaire" | "submitted" | "report";
 export type LeadFormState = {
   company_name: string;
+  city: string;
   industry: string;
   company_size: string;
   annual_revenue: string;
@@ -38,6 +39,7 @@ const aiFocusOptions = [
 
 const defaultLeadForm: LeadFormState = {
   company_name: "",
+  city: "",
   industry: "制造业",
   company_size: "1-200人",
   annual_revenue: "暂不填写",
@@ -78,6 +80,9 @@ export function useQuestionnaire() {
   const busy = ref(false);
   const draftSaved = ref(false);
   const reportWaitSeconds = ref(0);
+  const deliveryStatus = ref<string | null>(null);
+  const queuePosition = ref<number | null>(null);
+  const reportFailure = ref<string | null>(null);
   const reportPollTimer = ref<number | null>(null);
   const reportWaitTimer = ref<number | null>(null);
   const missingNoticeVisible = ref(false);
@@ -143,6 +148,16 @@ export function useQuestionnaire() {
     return Object.entries(answers.value).map(([question_id, itemScore]) => ({ question_id: Number(question_id), score: Number(itemScore) }));
   }
 
+  /** 过滤无效/过期答案：只保留当前题库内、score 为 0-4 整数的条目。 */
+  function sanitizeAnswers(list: { question_id: number; score: number }[]) {
+    const activeQuestionIds = new Set(questions.value.map((q) => q.id));
+    return list.filter((item) => {
+      const questionId = Number(item.question_id);
+      const score = Number(item.score);
+      return activeQuestionIds.has(questionId) && Number.isInteger(score) && score >= 0 && score <= 4;
+    });
+  }
+
   function persistLeadForm() {
     localStorage.setItem("diagnosis_lead_form", JSON.stringify({ ...leadForm }));
   }
@@ -152,7 +167,7 @@ export function useQuestionnaire() {
   }
 
   function isReportReady(item: Report): boolean {
-    return Boolean(item.html_content && ["generated", "fallback"].includes(item.status));
+    return Boolean(item.html_content && item.status === "generated");
   }
 
   function clearReportPolling() {
@@ -173,6 +188,39 @@ export function useQuestionnaire() {
     window.location.assign(appUrl(`/report/${token}`));
   }
 
+  function clearQuestionnaireResidue() {
+    localStorage.removeItem("diagnosis_lead_id");
+    localStorage.removeItem("submission_id");
+    localStorage.removeItem("diagnosis_report_token");
+    localStorage.removeItem("diagnosis_step");
+    localStorage.removeItem("diagnosis_module_index");
+    localStorage.removeItem("diagnosis_answers");
+    localStorage.removeItem("diagnosis_lead_form");
+    submissionId.value = null;
+    leadId.value = null;
+    Object.assign(leadForm, defaultLeadForm);
+    selectedAiFocus.value = [];
+    aiFocusOther.value = "";
+  }
+
+  function restartFlow() {
+    // 从等待页/报告页退出，回到首页重新填写。后端会在新一轮填写时
+    // 创建全新线索并返回新 session_token，旧线索数据不受影响。
+    clearReportPolling();
+    clearQuestionnaireResidue();
+    localStorage.removeItem("diagnosis_session");
+    sessionToken.value = null;
+    report.value = null;
+    score.value = null;
+    deliveryStatus.value = null;
+    queuePosition.value = null;
+    reportFailure.value = null;
+    reportWaitSeconds.value = 0;
+    error.value = "";
+    step.value = "intro";
+    persistStep();
+  }
+
   async function checkSubmittedReport(): Promise<boolean> {
     if (!sessionToken.value) return false;
     const cachedReportToken = localStorage.getItem("diagnosis_report_token");
@@ -182,12 +230,31 @@ export function useQuestionnaire() {
         ? await api.submissionReport(submissionId.value, sessionToken.value)
         : await api.publicReport(cachedReportToken!);
       report.value = currentReport;
+      deliveryStatus.value = currentReport.delivery_status ?? null;
+      queuePosition.value = currentReport.queue_position ?? null;
       localStorage.setItem("diagnosis_report_token", currentReport.public_token);
       if (isReportReady(currentReport)) {
         openReportPage(currentReport.public_token);
         return true;
       }
-    } catch {
+      if (currentReport.delivery_status === "failed" || currentReport.status === "failed") {
+        // 内部失败转人工处理，客户侧不暴露搜索、AI、PDF 或邮件错误细节。
+        clearReportPolling();
+        reportFailure.value = "您的诊断资料已收到，报告正在进一步审核，完成后将发送至您的邮箱。";
+        return false;
+      }
+    } catch (err) {
+      // 报告或答卷已被删除（如管理员在后台删除该线索）时，清除本地残留，
+      // 允许重新填写。轮询期间遇到该情况直接把页面带回首页，避免卡在等待页。
+      if (err instanceof ApiError && err.status === 404) {
+        clearQuestionnaireResidue();
+        if (step.value === "submitted") {
+          reportFailure.value = null;
+          step.value = "intro";
+          persistStep();
+        }
+        return false;
+      }
       // 尚未创建报告时继续保留在原来的填写/答题流程。
     }
     return false;
@@ -196,6 +263,8 @@ export function useQuestionnaire() {
   function startReportPolling() {
     clearReportPolling();
     reportWaitSeconds.value = 0;
+    deliveryStatus.value = null;
+    queuePosition.value = null;
     reportWaitTimer.value = window.setInterval(() => {
       reportWaitSeconds.value += 1;
     }, 1000);
@@ -231,6 +300,18 @@ export function useQuestionnaire() {
       moduleIndex.value = 0;
       localStorage.setItem("diagnosis_module_index", "0");
     }
+
+    // 题库可能已变更（停用/归档题目）：清除旧题目残留答案，
+    // 避免把多余的 question_id 提交给后端而被 422 拒绝。
+    const activeQuestionIds = new Set(modules.value.flatMap((module) => module.questions).map((q) => q.id));
+    const prunedAnswers: Record<number, number> = {};
+    for (const [questionId, itemScore] of Object.entries(answers.value)) {
+      const numericId = Number(questionId);
+      if (activeQuestionIds.has(numericId)) {
+        prunedAnswers[numericId] = Number(itemScore);
+      }
+    }
+    answers.value = prunedAnswers;
 
     // 恢复中断的答题进度
     const savedStep = localStorage.getItem("diagnosis_step");
@@ -276,6 +357,12 @@ export function useQuestionnaire() {
     busy.value = true;
     try {
       const result = await api.submitLead({ ...leadForm, phone, email, wechat, contact_authorized: leadForm.privacy_accepted, session_token: sessionToken.value, source_code: sourceFromUrl() });
+      // 新一轮诊断时后端会创建全新线索并返回新的 session_token，
+      // 必须立即替换本地旧 token，后续草稿/提交才不会被 404 拒绝。
+      if (result.lead.session_token) {
+        sessionToken.value = result.lead.session_token;
+        localStorage.setItem("diagnosis_session", result.lead.session_token);
+      }
       leadId.value = result.lead.id;
       submissionId.value = result.submission_id;
       localStorage.setItem("diagnosis_lead_id", String(result.lead.id));
@@ -370,7 +457,10 @@ export function useQuestionnaire() {
       missingNoticeVisible.value = false;
     }
     if (submissionId.value && sessionToken.value) {
-      await api.saveDraft(submissionId.value, answersToList(), sessionToken.value).catch(() => undefined);
+      await api.saveDraft(submissionId.value, answersToList(), sessionToken.value).catch((err) => {
+        // 草稿保存失败不阻断答题，但记录日志便于排查（提交时会整体重试）
+        console.warn("[问卷] 草稿保存失败，提交时会重试:", err);
+      });
     }
     draftSaved.value = true;
     setTimeout(() => { draftSaved.value = false; }, 2000);
@@ -390,7 +480,20 @@ export function useQuestionnaire() {
     busy.value = true;
     error.value = "";
     try {
-      const result = await api.submitQuestionnaire(submissionId.value, answersToList(), sessionToken.value);
+      const rawAnswers = answersToList();
+      const cleanAnswers = sanitizeAnswers(rawAnswers);
+      if (cleanAnswers.length !== rawAnswers.length) {
+        // 存在过期/无效答案（题库变更残留或本地数据损坏）：清理后让用户确认
+        const prunedAnswers: Record<number, number> = {};
+        for (const item of cleanAnswers) {
+          prunedAnswers[item.question_id] = item.score;
+        }
+        answers.value = prunedAnswers;
+        localStorage.setItem("diagnosis_answers", JSON.stringify(prunedAnswers));
+        showMissingNotice("检测到部分答案已过期或无效，已自动清理，请检查后重新提交");
+        return;
+      }
+      const result = await api.submitQuestionnaire(submissionId.value, cleanAnswers, sessionToken.value);
       score.value = result.score;
       report.value = result.report;
       localStorage.setItem("diagnosis_report_token", result.report.public_token);
@@ -452,6 +555,9 @@ export function useQuestionnaire() {
     busy,
     draftSaved,
     reportWaitSeconds,
+    deliveryStatus,
+    queuePosition,
+    reportFailure,
     missingNoticeVisible,
     missingNoticeMessage,
     leadForm,
@@ -481,6 +587,7 @@ export function useQuestionnaire() {
     submitQuestionnaire,
     handleBeforeUnload,
     clearReportPolling,
+    restartFlow,
   };
 }
 

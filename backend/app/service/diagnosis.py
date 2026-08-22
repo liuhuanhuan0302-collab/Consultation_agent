@@ -9,26 +9,31 @@
   5. 根据评分结果 + 联系方式计算线索等级
 """
 
-from datetime import datetime
-
-from fastapi import HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.models import (
     CompanyLead,
     DimensionScore,
-    Question,
-    QuestionAnswer,
     SubmissionStatus,
 )
 from app.repositories.consult_repo import (
     delete_dimension_scores,
     get_answer_map,
-    get_existing_answers,
     get_submission_by_id,
 )
+from app.repositories.questionnaire_repo import active_modules_with_questions
+from app.repositories.submission_repo import upsert_answers
 from app.schemas import DimensionScoreRead, ScoreResponse
 from app.service.scoring import ModuleScoreSpec, QuestionScoreSpec, compute_scores
+from app.utils.time_utils import utc_now
+
+
+class DiagnosisSubmissionNotFoundError(Exception):
+    """The requested diagnosis submission does not exist."""
+
+
+class DiagnosisScoreValidationError(Exception):
+    """Stored answers cannot be scored against the active questionnaire."""
 
 
 def serialize_score(submission_id: int, score_result) -> ScoreResponse:
@@ -60,14 +65,7 @@ def persist_answers(db: Session, submission_id: int, answers: list) -> None:
     保存/更新答卷。
     question_id 已存在则覆盖分数，不存在则新增。
     """
-    question_ids = {answer.question_id for answer in answers}
-    existing_map = get_existing_answers(db, submission_id, question_ids)
-    for answer in answers:
-        if answer.question_id in existing_map:
-            existing_map[answer.question_id].score = answer.score
-        else:
-            db.add(QuestionAnswer(submission_id=submission_id, question_id=answer.question_id, score=answer.score))
-    db.flush()
+    upsert_answers(db, submission_id, answers)
 
 
 def calculate_lead_level(lead: CompanyLead, score_result) -> str:
@@ -108,17 +106,16 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
     """
     db_submission = get_submission_by_id(db, submission_id)
     if not db_submission:
-        raise HTTPException(status_code=404, detail="Submission not found")
+        raise DiagnosisSubmissionNotFoundError("Submission not found")
 
     answer_map = get_answer_map(db, submission_id)
-    # 使用本次提交实际携带的题目评分，避免后台调整题库后影响已开始填写的客户。
-    questions = (
-        db.query(Question)
-        .options(joinedload(Question.module))
-        .filter(Question.id.in_(answer_map))
-        .all()
-    )
-    modules = sorted({question.module for question in questions}, key=lambda module: module.sort_order)
+    modules = active_modules_with_questions(db)
+    questions = [
+        question
+        for module in modules
+        for question in sorted(module.questions, key=lambda item: item.sort_order)
+        if question.is_active
+    ]
     try:
         score_result = compute_scores(
             [ModuleScoreSpec(module.id, module.code, module.name, module.max_score) for module in modules],
@@ -126,7 +123,7 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
             answer_map,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise DiagnosisScoreValidationError(str(exc)) from exc
 
     # 清除旧维度分数，写入新数据
     delete_dimension_scores(db, submission_id)
@@ -146,7 +143,7 @@ def score_submission(db: Session, submission_id: int) -> ScoreResponse:
     db_submission.score_rate = score_result.score_rate
     db_submission.risk_level = score_result.risk_level
     db_submission.status = SubmissionStatus.scored.value
-    db_submission.submitted_at = db_submission.submitted_at or datetime.utcnow()
+    db_submission.submitted_at = db_submission.submitted_at or utc_now()
     # 更新线索等级
     db_submission.lead.lead_level = calculate_lead_level(db_submission.lead, score_result)
     db_submission.lead.demand_summary = summarize_customer_demand(db_submission.lead, score_result)

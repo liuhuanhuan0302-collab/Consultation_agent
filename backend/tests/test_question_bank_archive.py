@@ -33,7 +33,7 @@ def test_archived_question_is_hidden_from_active_questionnaire():
     archive_question(question.id, db=db, user=user)
 
     assert db.get(Question, question.id).is_active is False
-    assert active_modules_with_questions(db)[0].questions == []
+    assert active_modules_with_questions(db) == []
     db.close()
     engine.dispose()
 
@@ -52,6 +52,17 @@ def test_archived_module_is_hidden_from_active_questionnaire():
 
     assert db.get(QuestionModule, module.id).is_active is False
     assert db.get(Question, question.id).is_active is False
+    assert active_modules_with_questions(db) == []
+    db.close()
+    engine.dispose()
+
+
+def test_empty_active_module_is_hidden_from_public_questionnaire():
+    db, engine = create_db()
+    module = QuestionModule(code="M01", name="Empty module", max_score=4, sort_order=1)
+    db.add(module)
+    db.commit()
+
     assert active_modules_with_questions(db) == []
     db.close()
     engine.dispose()

@@ -14,10 +14,13 @@ def send_report_pdf_email(
     html_bytes: bytes | None = None,
     html_filename: str | None = None,
 ) -> None:
-    """通过 SMTP 将报告 PDF 和可选 HTML 报告附件发送到用户邮箱。"""
+    """通过 SMTP 发送由最终网页版报告渲染得到的 PDF。"""
     settings = get_settings()
     if not settings.smtp_host or not settings.smtp_username or not settings.smtp_password:
         raise RuntimeError("邮件服务未配置，请先配置 SMTP_HOST、SMTP_USERNAME、SMTP_PASSWORD")
+    allowlist = settings.smtp_recipient_allowlist_set
+    if allowlist and to_email.strip().lower() not in allowlist:
+        raise RuntimeError("当前环境禁止向非测试邮箱发送报告")
 
     from_email = settings.smtp_from_email or settings.smtp_username
     message = EmailMessage()
@@ -30,7 +33,7 @@ def send_report_pdf_email(
 
 您申请领取的《{report_title}》已随邮件附件发送。
 {url_line}
-附件包含 PDF 报告；如 PDF 在个别设备上显示不完整，也可以打开 HTML 报告文件或在线报告链接查看完整排版。
+附件包含与在线报告内容一致的 PDF 诊断报告。
 
 如需进一步解读报告或安排顾问沟通，可直接回复本邮件。
 

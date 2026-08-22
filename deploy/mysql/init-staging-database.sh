@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+require_safe_identifier() {
+    name="$1"
+    value="$2"
+    if ! printf '%s' "$value" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+        echo "$name 只能包含字母、数字和 _ . -" >&2
+        exit 1
+    fi
+}
+
+: "${MYSQL_ROOT_PASSWORD:?缺少 MYSQL_ROOT_PASSWORD}"
+: "${STAGING_MYSQL_DATABASE:?缺少 STAGING_MYSQL_DATABASE}"
+: "${STAGING_MYSQL_USER:?缺少 STAGING_MYSQL_USER}"
+: "${STAGING_MYSQL_PASSWORD:?缺少 STAGING_MYSQL_PASSWORD}"
+
+require_safe_identifier STAGING_MYSQL_DATABASE "$STAGING_MYSQL_DATABASE"
+require_safe_identifier STAGING_MYSQL_USER "$STAGING_MYSQL_USER"
+require_safe_identifier STAGING_MYSQL_PASSWORD "$STAGING_MYSQL_PASSWORD"
+
+export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
+mysql -hmysql -uroot <<SQL
+CREATE DATABASE IF NOT EXISTS \`$STAGING_MYSQL_DATABASE\`
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$STAGING_MYSQL_USER'@'%'
+  IDENTIFIED BY '$STAGING_MYSQL_PASSWORD';
+ALTER USER '$STAGING_MYSQL_USER'@'%'
+  IDENTIFIED BY '$STAGING_MYSQL_PASSWORD';
+GRANT ALL PRIVILEGES ON \`$STAGING_MYSQL_DATABASE\`.*
+  TO '$STAGING_MYSQL_USER'@'%';
+FLUSH PRIVILEGES;
+SQL
+
+echo "测试数据库 $STAGING_MYSQL_DATABASE 已准备完成"

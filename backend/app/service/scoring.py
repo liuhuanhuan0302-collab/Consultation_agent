@@ -88,11 +88,11 @@ def compute_scores(
     核心评分算法。
 
     输入：
-      modules   — 全部 10 个模块
-      questions — 全部 68 题
+      modules   — 当前参与评分的全部模块
+      questions — 当前参与评分的全部题目
       answers   — {question_id: score}，score 范围 0-4
 
-    返回：ScoreResult 包含总分、得分率、风险等级、10 维度明细。
+    返回：ScoreResult 包含总分、得分率、风险等级和当前模块维度明细。
 
     算法：
       对每个模块：

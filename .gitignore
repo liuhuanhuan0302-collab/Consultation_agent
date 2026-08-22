@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 !.env.production.example
+!.env.staging.example
 *.db
 *.sqlite
 __pycache__/
@@ -32,3 +33,12 @@ backend/.idea/
 .git_*_backup/
 backend/.git_*_backup/
 frontend/.git_*_backup/
+tmp/
+# 真实客户数据与调试产物：严禁进入版本库
+backend/pdf_review_pages/
+backend/scripts/debug_*.py
+backend/scripts/fail_sample.json
+backend/scripts/rescue_*.py
+backend/scripts/backfill_research_*.py
+backend/scripts/verify_new_parser.py
+
