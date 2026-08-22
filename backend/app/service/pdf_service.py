@@ -192,6 +192,7 @@ def browser_executable() -> str:
 
 
 def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
+    settings = get_settings()
     url = report_public_url(report)
     browser = browser_executable()
     with tempfile.TemporaryDirectory(prefix="report-pdf-") as tmp:
@@ -215,6 +216,13 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
             f"--print-to-pdf={pdf_path}",
             url,
         ]
+        # 容器环境（security_opt: no-new-privileges + cap_drop: ALL）中 Chromium
+        # 沙箱无法启动（setuid helper 被 no-new-privileges 禁止、宿主 AppArmor
+        # 又限制非特权用户命名空间）。此时容器本身即隔离边界，且渲染内容为本
+        # 系统生成并净化过的报告 HTML，按 Playwright 容器部署惯例加 --no-sandbox。
+        # 非容器环境保持沙箱开启，默认关闭该开关。
+        if settings.pdf_browser_no_sandbox:
+            command.insert(1, "--no-sandbox")
         result = subprocess.run(
             command,
             check=False,
@@ -223,8 +231,15 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
             timeout=45,
         )
         if result.returncode != 0 or not pdf_path.exists():
+            stderr = result.stderr[-500:]
+            hint = ""
+            if "No usable sandbox" in stderr and not settings.pdf_browser_no_sandbox:
+                hint = (
+                    "；容器/受限环境请设置 PDF_BROWSER_NO_SANDBOX=true"
+                    "（容器已通过 cap_drop 与 no-new-privileges 隔离）"
+                )
             raise RuntimeError(
-                f"浏览器打印 PDF 失败: code={result.returncode}, stderr={result.stderr[-500:]}"
+                f"浏览器打印 PDF 失败: code={result.returncode}, stderr={stderr}{hint}"
             )
         return pdf_path.read_bytes()
 

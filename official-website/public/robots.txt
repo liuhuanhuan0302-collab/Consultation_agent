@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /diagnosis/admin
+
+Sitemap: https://youyuexinxi.com.cn/sitemap.xml

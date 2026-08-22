@@ -50,6 +50,10 @@ class Settings(BaseSettings):
 
     pdf_browser_render: bool = Field(default=True, description="是否使用浏览器渲染 PDF")
     pdf_browser_executable: str | None = Field(default=None, description="Chrome/Edge/Chromium 路径")
+    pdf_browser_no_sandbox: bool = Field(
+        default=False,
+        description="Chromium 加 --no-sandbox 启动；容器环境（cap_drop/no-new-privileges）必须开启",
+    )
 
     smtp_host: str | None = Field(default=None, description="SMTP 服务器地址")
     smtp_port: int = Field(default=465, description="SMTP SSL 端口")

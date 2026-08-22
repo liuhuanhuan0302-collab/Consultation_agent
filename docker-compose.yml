@@ -43,6 +43,8 @@ services:
       - ALL
     env_file:
       - .env.production
+    environment:
+      PDF_BROWSER_NO_SANDBOX: "true"
     volumes:
       - backend_data:/app/data
     depends_on:
@@ -67,6 +69,8 @@ services:
     command: ["python", "scripts/report_worker.py"]
     env_file:
       - .env.production
+    environment:
+      PDF_BROWSER_NO_SANDBOX: "true"
     volumes:
       - backend_data:/app/data
     depends_on:
@@ -107,6 +111,8 @@ services:
       - ALL
     env_file:
       - .env.staging
+    environment:
+      PDF_BROWSER_NO_SANDBOX: "true"
     volumes:
       - backend_staging_data:/app/data
     depends_on:
@@ -132,6 +138,8 @@ services:
     command: ["python", "scripts/report_worker.py"]
     env_file:
       - .env.staging
+    environment:
+      PDF_BROWSER_NO_SANDBOX: "true"
     volumes:
       - backend_staging_data:/app/data
     depends_on:
