@@ -37,7 +37,13 @@ def test_customer_pdf_template_excludes_internal_lead_and_research_fields():
         created_at=datetime(2026, 8, 23),
         public_token="public-token",
         summary_json=json.dumps(
-            {"score": {"total": 80, "max_score": 100, "score_rate": 0.8}},
+            {
+                "score": {"total": 80, "max_score": 100, "score_rate": 0.8},
+                "dimensions": [
+                    {"module_code": "M01", "module_name": "一心：战略", "score_rate": 0.4},
+                    {"module_code": "M02", "module_name": "简化业务", "score_rate": 0.8},
+                ],
+            },
             ensure_ascii=False,
         ),
         submission=SimpleNamespace(
@@ -65,6 +71,10 @@ def test_customer_pdf_template_excludes_internal_lead_and_research_fields():
     assert "诊断总分" in html and "80" in html
     assert "满分" in html and "100" in html
     assert "综合得分率" in html and "80%" in html
+    assert "能力成熟度排行" in html
+    assert "AI 转型能力雷达图" in html
+    assert "一心" in html and "简化业务" in html
+    assert "<svg" in html
     assert "维度概览" not in html
     assert "在线报告" not in html
     for internal_label in ("联系人", "手机号", "邮箱", "微信", "来源", "首次查看人", "AI搜索"):
@@ -79,14 +89,14 @@ def test_customer_report_filename_is_readable_and_safe():
         title="备用标题",
         submission=SimpleNamespace(lead=SimpleNamespace(company_name="奥飞/娱乐:*?")),
     )
-    assert customer_report_filename(report) == "奥飞_娱乐_AI原生转型诊断报告.pdf"
+    assert customer_report_filename(report) == "奥飞_娱乐_AI诊断报告.pdf"
 
     empty_company = SimpleNamespace(
         id=124,
         title="",
         submission=SimpleNamespace(lead=SimpleNamespace(company_name="<>:/\\|?*")),
     )
-    assert customer_report_filename(empty_company) == "企业AI原生转型诊断报告.pdf"
+    assert customer_report_filename(empty_company) == "企业AI诊断报告.pdf"
 
 
 def test_no_sandbox_flag_adds_launch_argument(monkeypatch, tmp_path):

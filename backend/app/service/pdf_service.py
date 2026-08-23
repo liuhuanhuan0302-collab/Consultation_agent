@@ -65,8 +65,8 @@ def customer_report_filename(report: Report) -> str:
     company_name = REPORT_FILENAME_INVALID_CHARS_RE.sub("_", report_company_name(report))
     company_name = company_name.strip(" ._")
     if not company_name:
-        return "企业AI原生转型诊断报告.pdf"
-    return f"{company_name}_AI原生转型诊断报告.pdf"
+        return "企业AI诊断报告.pdf"
+    return f"{company_name}_AI诊断报告.pdf"
 
 
 def validate_report_html(report: Report) -> None:
@@ -110,6 +110,85 @@ def html_to_text(html: str) -> str:
     text = re.sub(r"</(h1|h2|h3|p|li|tr|section)>", "\n", html)
     text = TAG_RE.sub("", text)
     return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _dimension_rate(item: dict) -> float:
+    try:
+        return max(0.0, min(float(item.get("score_rate") or 0), 1.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _dimension_name(item: dict) -> str:
+    name = str(item.get("module_name") or item.get("module_code") or "")
+    return name.split("：", 1)[0].strip() or "未命名维度"
+
+
+def render_report_charts_html(dimensions: list[dict]) -> str:
+    """将 summary_json 中的维度快照渲染为无脚本 SVG，供客户 PDF 打印。"""
+    if not dimensions:
+        return ""
+    ordered = list(dimensions)
+    sorted_dimensions = sorted(ordered, key=_dimension_rate)
+
+    bar_width, bar_height, row_gap = 500, 26, 18
+    bar_chart_height = 76 + len(sorted_dimensions) * (bar_height + row_gap)
+    bar_rows: list[str] = []
+    for index, item in enumerate(sorted_dimensions):
+        y = 48 + index * (bar_height + row_gap)
+        rate = _dimension_rate(item)
+        label = escape(_dimension_name(item))
+        bar_rows.append(
+            f'<text x="0" y="{y + 18}" class="chart-label">{label}</text>'
+            f'<rect x="150" y="{y}" width="290" height="{bar_height}" rx="6" class="bar-bg" />'
+            f'<rect x="150" y="{y}" width="{290 * rate:.2f}" height="{bar_height}" rx="6" class="bar-fill" />'
+            f'<text x="455" y="{y + 18}" class="chart-value">{round(rate * 100)}%</text>'
+        )
+    bar_svg = (
+        f'<svg viewBox="0 0 {bar_width} {bar_chart_height}" role="img" '
+        f'aria-label="能力成熟度排行图"><text x="0" y="20" class="svg-title">'
+        f'能力成熟度排行</text>{"".join(bar_rows)}</svg>'
+    )
+
+    radar_width, radar_height, cx, cy, radius = 520, 400, 260, 215, 125
+
+    def radar_point(index: int, value: float) -> tuple[float, float]:
+        angle = -math.pi / 2 + 2 * math.pi * index / len(ordered)
+        return cx + math.cos(angle) * radius * value, cy + math.sin(angle) * radius * value
+
+    ring_polygons: list[str] = []
+    axis_lines: list[str] = []
+    for ring in range(1, 6):
+        points = [radar_point(index, ring / 5) for index in range(len(ordered))]
+        point_text = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+        ring_polygons.append(f'<polygon points="{point_text}" class="radar-ring" />')
+    for index, item in enumerate(ordered):
+        x, y = radar_point(index, 1)
+        label_x, label_y = radar_point(index, 1.18)
+        axis_lines.append(f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" class="radar-axis" />')
+        axis_lines.append(
+            f'<text x="{label_x:.1f}" y="{label_y:.1f}" text-anchor="middle" class="radar-label">'
+            f'{escape(_dimension_name(item))}</text>'
+        )
+    value_points = [radar_point(index, _dimension_rate(item)) for index, item in enumerate(ordered)]
+    value_text = " ".join(f"{x:.1f},{y:.1f}" for x, y in value_points)
+    value_nodes = "".join(
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" class="radar-point" />' for x, y in value_points
+    )
+    radar_svg = (
+        f'<svg viewBox="0 0 {radar_width} {radar_height}" role="img" '
+        f'aria-label="AI 转型能力雷达图"><text x="0" y="20" class="svg-title">'
+        f'AI 转型能力雷达图</text>{"".join(ring_polygons)}{"".join(axis_lines)}'
+        f'<polygon points="{value_text}" class="radar-value" />{value_nodes}</svg>'
+    )
+    return f"""
+    <section class="chart-grid">
+      <div class="chart-card"><div class="chart-card-header"><span class="card-accent"></span>
+        <h3>能力成熟度排行</h3><p>按当前启用维度的得分率从低到高排列</p></div>{bar_svg}</div>
+      <div class="chart-card"><div class="chart-card-header"><span class="card-accent radar-accent"></span>
+        <h3>AI 转型能力雷达图</h3><p>按当前启用维度生成，面积越大代表能力越均衡</p></div>{radar_svg}</div>
+    </section>
+    """
 
 
 def rate_color(rate: float) -> colors.Color:
@@ -322,6 +401,8 @@ def render_report_html_attachment(report: Report) -> bytes:
     report_number = f"RPT-{report.id:06d}" if isinstance(report.id, int) else "RPT-UNKNOWN"
     report_date = report.created_at.strftime("%Y-%m-%d") if report.created_at else "-"
     score = summary.get("score") or {}
+    dimensions = summary.get("dimensions") or []
+    charts = render_report_charts_html(dimensions)
     score_rate = score.get("score_rate")
     score_rate_text = "-" if score_rate is None else f"{round(float(score_rate) * 100)}%"
     html = f"""<!doctype html>
@@ -346,6 +427,24 @@ def render_report_html_attachment(report: Report) -> bytes:
     .score-card span {{ color: #94a3b8; display: block; font-size: 12px; font-weight: 700; margin-bottom: 8px; }}
     .score-card strong {{ color: #0f172a; display: block; font-size: 34px; line-height: 1; }}
     .score-card em {{ color: #94a3b8; font-size: 18px; font-style: normal; }}
+    .chart-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 28px 0; }}
+    .chart-card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 24px 24px 18px; break-inside: avoid; }}
+    .chart-card-header {{ margin-bottom: 10px; }}
+    .card-accent {{ display: block; width: 34px; height: 4px; border-radius: 4px; background: linear-gradient(135deg,#2563eb,#38bdf8); margin-bottom: 10px; }}
+    .radar-accent {{ background: linear-gradient(135deg,#8b5cf6,#6366f1); }}
+    .chart-card h3 {{ color: #0f172a; font-size: 16px; margin: 0 0 4px; }}
+    .chart-card p {{ color: #94a3b8; font-size: 12px; margin: 0; }}
+    .chart-card svg {{ display: block; width: 100%; height: auto; margin-top: 14px; overflow: visible; }}
+    .svg-title {{ fill: #334155; font-size: 14px; font-weight: 700; }}
+    .chart-label, .chart-value {{ fill: #475569; font-size: 11px; }}
+    .chart-value {{ font-weight: 700; }}
+    .bar-bg {{ fill: #e2e8f0; }}
+    .bar-fill {{ fill: #3b82f6; }}
+    .radar-ring {{ fill: none; stroke: #dbe4ef; stroke-width: 1; }}
+    .radar-axis {{ stroke: #dbe4ef; stroke-width: 1; }}
+    .radar-label {{ fill: #475569; font-size: 11px; }}
+    .radar-value {{ fill: rgba(59,130,246,.16); stroke: #3b82f6; stroke-width: 2.5; }}
+    .radar-point {{ fill: #22c55e; stroke: #fff; stroke-width: 2; }}
     .report-html {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; margin-top: 28px; padding: 38px 46px; page-break-before: always; }}
     h2 {{ border-top: 1px solid #e2e8f0; color: #0f172a; font-size: 20px; margin: 32px 0 16px; padding-top: 24px; }}
     h3 {{ color: #1e293b; font-size: 17px; margin: 22px 0 10px; }}
@@ -357,6 +456,7 @@ def render_report_html_attachment(report: Report) -> bytes:
       .shell {{ padding: 18px; }}
       .hero {{ padding: 28px 24px; }}
       .score-strip {{ grid-template-columns: 1fr; }}
+      .chart-grid {{ grid-template-columns: 1fr; }}
       .report-meta {{ grid-template-columns: 1fr; }}
       .report-html {{ padding: 26px 22px; }}
     }}
@@ -378,6 +478,7 @@ def render_report_html_attachment(report: Report) -> bytes:
       <div class="score-card"><span>满分</span><strong>{escape(str(score.get("max_score", "-")))}</strong></div>
       <div class="score-card"><span>综合得分率</span><strong>{escape(score_rate_text)}</strong></div>
     </section>
+    {charts}
     <article class="report-html">{sanitize_report_content(report.html_content)}</article>
   </main>
 </body>
