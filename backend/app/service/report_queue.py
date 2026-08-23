@@ -19,7 +19,7 @@ from app.models import (
 from app.service.company_research import research_company
 from app.service.email_service import send_report_pdf_email
 from app.service.lead_status import sync_lead_processing_status
-from app.service.pdf_service import render_report_pdf_bytes, report_public_url
+from app.service.pdf_service import customer_report_filename, render_report_pdf_bytes, report_public_url
 from app.service.reporting import generate_report_content, report_generation_semaphore
 from app.utils.time_utils import utc_now
 
@@ -365,7 +365,7 @@ async def process_report_delivery_job(job_id: int) -> bool:
             job.recipient_email,
             report.title,
             pdf,
-            f"diagnosis-report-{report.public_token}.pdf",
+            customer_report_filename(report),
             report_url=report_url,
         )
 
