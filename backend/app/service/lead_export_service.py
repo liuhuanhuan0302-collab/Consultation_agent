@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
 from io import BytesIO
@@ -19,7 +20,9 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 from PIL import Image, ImageDraw, ImageFont
 
-from app.models import CompanyLead, DiagnosisSubmission, Report
+from app.models.lead import CompanyLead
+from app.models.questionnaire import DiagnosisSubmission
+from app.models.report import Report
 from app.service.company_research import research_section_text, research_subsections
 from app.service.report_content import sanitize_report_content
 from app.utils.time_utils import to_china_time, utc_now
@@ -32,6 +35,7 @@ BODY_COLOR = RGBColor(31, 44, 61)
 MUTED_COLOR = RGBColor(92, 108, 132)
 MISSING_RESEARCH = "暂未检索到可靠公开信息"
 REPORT_CONTENT_WIDTH_CM = 17.4
+SCORE_RATE_ABSOLUTE_TOLERANCE = 0.0001
 
 RESEARCH_SECTIONS: tuple[tuple[str, str, bool], ...] = (
     ("company_overview", "公司介绍", True),
@@ -43,6 +47,17 @@ RESEARCH_SECTIONS: tuple[tuple[str, str, bool], ...] = (
     ("ai_opportunities", "AI 能提供的帮助", False),
     ("analysis", "AI 综合分析", False),
 )
+
+
+class CustomerReportScoreError(ValueError):
+    """Persisted score snapshot is unsafe for a formal customer deliverable."""
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerReportScore:
+    total_score: float
+    max_score: float
+    score_rate: float
 
 
 class _HtmlNode:
@@ -702,15 +717,173 @@ def _render_report_nodes(
             _render_report_nodes(document, node.children, dimensions, chart_state)
 
 
+def build_final_diagnosis_report(document: Document, report: Report) -> None:
+    """把最终诊断报告渲染进现有文档，内部 Word 档案第三部分与客户 DOCX 共用。
+
+    两份文档由此共享同一套标题样式、深蓝表头、表格列宽、行距、字号、
+    成熟度排行图与雷达图；调整这里即可让两边同步变化。
+    """
+    parser = _ReportHtmlParser()
+    parser.feed(sanitize_report_content(report.html_content))
+    _render_report_nodes(document, parser.root.children, _load_report_dimensions(report))
+
+
 def _add_final_report(document: Document, report: Report | None, final_report_sent: bool) -> None:
     if not report or not final_report_sent or not report.html_content:
         paragraph = document.add_paragraph("客户最终诊断报告尚未发送，暂无可导出的最终版本。")
         paragraph.paragraph_format.space_before = Pt(12)
         _set_paragraph_font(paragraph)
         return
-    parser = _ReportHtmlParser()
-    parser.feed(sanitize_report_content(report.html_content))
-    _render_report_nodes(document, parser.root.children, _load_report_dimensions(report))
+    build_final_diagnosis_report(document, report)
+
+
+def _numeric_score_value(score: dict, key: str) -> float:
+    value = score.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CustomerReportScoreError(f"score.{key} 必须是非布尔数值")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise CustomerReportScoreError(f"score.{key} 必须是有限数值")
+    return numeric
+
+
+def customer_report_score(report: Report) -> CustomerReportScore:
+    """Load and strictly validate the persisted score snapshot used in delivery.
+
+    ``summary_json.score.total`` is the persisted total-score field produced by
+    the report generator. Validation happens before either PDF renderer and is
+    also enforced by the standalone customer-DOCX builder, so formal output can
+    never replace an invalid score with a visual dash.
+    """
+    raw_summary = getattr(report, "summary_json", None)
+    if not raw_summary:
+        raise CustomerReportScoreError("summary_json 缺少 score 评分快照")
+    try:
+        payload = json.loads(raw_summary)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise CustomerReportScoreError("summary_json 不是有效 JSON") from exc
+    score = payload.get("score") if isinstance(payload, dict) else None
+    if not isinstance(score, dict):
+        raise CustomerReportScoreError("summary_json 缺少 score 评分对象")
+
+    total_score = _numeric_score_value(score, "total")
+    max_score = _numeric_score_value(score, "max_score")
+    score_rate = _numeric_score_value(score, "score_rate")
+    if total_score < 0:
+        raise CustomerReportScoreError("score.total_score 不得小于 0")
+    if max_score <= 0:
+        raise CustomerReportScoreError("score.max_score 必须大于 0")
+    if total_score > max_score:
+        raise CustomerReportScoreError("score.total_score 不得大于 score.max_score")
+    if not 0 <= score_rate <= 1:
+        raise CustomerReportScoreError("score.score_rate 必须位于 0 到 1 之间")
+    expected_rate = total_score / max_score
+    if not math.isclose(
+        score_rate,
+        expected_rate,
+        rel_tol=0.0,
+        abs_tol=SCORE_RATE_ABSOLUTE_TOLERANCE,
+    ):
+        raise CustomerReportScoreError(
+            "score.score_rate 与 score.total_score / score.max_score 不一致"
+        )
+    return CustomerReportScore(
+        total_score=total_score,
+        max_score=max_score,
+        score_rate=score_rate,
+    )
+
+
+def _report_number(report: Report) -> str:
+    report_id = getattr(report, "id", None)
+    return f"RPT-{report_id:06d}" if isinstance(report_id, int) else "RPT-UNKNOWN"
+
+
+def _report_date(report: Report) -> str:
+    created = getattr(report, "created_at", None)
+    return to_china_time(created).strftime("%Y-%m-%d") if created else "未记录"
+
+
+def _score_number_text(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def _score_rate_text(score: CustomerReportScore) -> str:
+    return f"{round(score.score_rate * 100)}%"
+
+
+def _add_customer_report_head(
+    document: Document,
+    company_name: str,
+    report: Report,
+    score: CustomerReportScore,
+) -> None:
+    eyebrow = document.add_paragraph()
+    eyebrow.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    eyebrow.paragraph_format.space_before = Pt(6)
+    run = eyebrow.add_run("AI 原生转型诊断报告")
+    run.font.color.rgb = RGBColor(47, 102, 157)
+    _set_run_font(run, size=11, bold=True)
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(10)
+    title.paragraph_format.space_after = Pt(14)
+    run = title.add_run(company_name)
+    run.font.color.rgb = RGBColor(13, 48, 82)
+    _set_run_font(run, size=24, bold=True)
+
+    meta = document.add_table(rows=0, cols=2)
+    meta.style = "Table Grid"
+    meta.alignment = WD_TABLE_ALIGNMENT.CENTER
+    meta.autofit = False
+    _set_fixed_table_layout(meta)
+    meta_widths = [REPORT_CONTENT_WIDTH_CM / 2] * 2
+    _set_table_grid_widths(meta, meta_widths)
+    meta_cells = meta.add_row().cells
+    _set_cell_text(meta_cells[0], "报告编号", _report_number(report))
+    _set_cell_text(meta_cells[1], "报告日期", _report_date(report))
+    for cell, width in zip(meta_cells, meta_widths):
+        _set_cell_width(cell, width)
+    _prevent_row_split(meta.rows[-1])
+
+    score_table = document.add_table(rows=0, cols=3)
+    score_table.style = "Table Grid"
+    score_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    score_table.autofit = False
+    _set_fixed_table_layout(score_table)
+    widths = [REPORT_CONTENT_WIDTH_CM / 3] * 3
+    _set_table_grid_widths(score_table, widths)
+    score_cells = score_table.add_row().cells
+    _set_cell_text(score_cells[0], "诊断总分", _score_number_text(score.total_score))
+    _set_cell_text(score_cells[1], "满分", _score_number_text(score.max_score))
+    _set_cell_text(score_cells[2], "综合得分率", _score_rate_text(score))
+    for cell, width in zip(score_cells, widths):
+        _set_cell_width(cell, width)
+    _prevent_row_split(score_table.rows[-1])
+
+
+def generate_customer_report_docx(
+    report: Report,
+    company_name: str,
+    *,
+    score: CustomerReportScore | None = None,
+) -> bytes:
+    """生成只含客户可见内容的报告 DOCX：报告头（公司/编号/日期/评分）+ 最终诊断报告。
+
+    与内部 Word 档案第三部分共用 build_final_diagnosis_report；不包含客户
+    基本信息、联系方式、公开情报分析等内部模块。该 DOCX 是客户 PDF 的唯一来源。
+    """
+    document = Document()
+    _set_document_font(document)
+    _configure_section(document.sections[0], header_text="AI 原生转型诊断报告")
+    persisted_score = score if score is not None else customer_report_score(report)
+    _add_customer_report_head(document, company_name or "企业", report, persisted_score)
+    document.add_page_break()
+    build_final_diagnosis_report(document, report)
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 def generate_lead_export_docx(

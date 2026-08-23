@@ -24,8 +24,10 @@ Issues: I-030, I-050
 Outcome: role behavior has executable evidence and project documentation matches
 the real domain layout and call paths.
 
-## M4 - Final regression and delivery inventory
+## M4 - Customer report delivery and final regression
 
-Issues: I-060  
-Outcome: independent regression evidence, remaining unverified items, and an exact
-safe commit inventory are available. No commit or deployment is performed.
+Issues: I-080, I-060
+Outcome: customer PDF delivery reuses the internal Word final-report layout via
+LibreOffice with a controlled Chromium fallback; independent regression evidence,
+remaining unverified items, and an exact safe commit inventory are available.
+No commit or deployment is performed.

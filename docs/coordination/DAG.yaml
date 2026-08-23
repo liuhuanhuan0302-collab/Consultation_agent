@@ -40,14 +40,19 @@ nodes:
   I-060:
     title: Independent final regression
     milestone: M4
-    depends_on: [I-040, I-010, I-020, I-030, I-050]
+    depends_on: [I-040, I-010, I-020, I-030, I-050, I-080]
     status: pending
   I-070:
     title: Replace deprecated UTC timestamp in public lead limit
     milestone: M4
     depends_on: [I-050]
     status: accepted
-scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-060]
+  I-080:
+    title: Reuse internal Word final report for customer PDF delivery
+    milestone: M4
+    depends_on: [I-050, I-070]
+    status: implementing
+scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-080, I-060]
 optional_nodes:
   I-041:
     title: Read-only historical research audit

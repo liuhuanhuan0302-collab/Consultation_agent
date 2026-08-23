@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import tempfile
 import asyncio
+from dataclasses import dataclass
+from datetime import datetime
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -21,8 +23,14 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from reportlab.graphics.shapes import Circle, Drawing, Line, Polygon, Rect, String
 
-from app.config import get_settings
-from app.models import Report
+from app.core.config import get_settings
+from app.models.report import Report
+from app.service.lead_export_service import (
+    CustomerReportScore,
+    CustomerReportScoreError,
+    customer_report_score,
+    generate_customer_report_docx,
+)
 from app.service.report_content import sanitize_report_content
 
 
@@ -51,13 +59,40 @@ class ReportPdfValidationError(RuntimeError):
     """最终 PDF 与固定报告模板不一致，禁止发送给客户。"""
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerReportSnapshot:
+    """PDF 渲染所需的纯值快照，避免在线程中触发 ORM 懒加载。"""
+
+    id: int | None
+    title: str
+    created_at: datetime | None
+    summary_json: str | None
+    html_content: str
+    company_name: str
+
+
 def report_company_name(report: Report) -> str:
+    explicit_name = str(getattr(report, "company_name", "") or "").strip()
+    if explicit_name:
+        return explicit_name
     submission = getattr(report, "submission", None)
     lead = getattr(submission, "lead", None)
     company_name = str(getattr(lead, "company_name", "") or "").strip()
     if company_name:
         return company_name
     return str(report.title or "企业").split(" AI 原生转型诊断报告", 1)[0].strip() or "企业"
+
+
+def customer_report_snapshot(report: Report) -> CustomerReportSnapshot:
+    """在当前数据库线程复制渲染字段；后台线程只接收该纯值快照产生的 bytes。"""
+    return CustomerReportSnapshot(
+        id=getattr(report, "id", None),
+        title=str(getattr(report, "title", "") or "AI 原生转型诊断报告"),
+        created_at=getattr(report, "created_at", None),
+        summary_json=getattr(report, "summary_json", None),
+        html_content=str(getattr(report, "html_content", "") or ""),
+        company_name=report_company_name(report),
+    )
 
 
 def customer_report_filename(report: Report) -> str:
@@ -74,6 +109,14 @@ def validate_report_html(report: Report) -> None:
     missing = [keyword for keyword in REPORT_SECTION_KEYWORDS if keyword not in content]
     if missing:
         raise ReportPdfValidationError(f"网页版报告缺少章节关键词：{', '.join(missing)}")
+
+
+def validate_report_score_snapshot(report: Report) -> CustomerReportScore:
+    """Fail closed before renderer selection when persisted scores are unsafe."""
+    try:
+        return customer_report_score(report)
+    except CustomerReportScoreError as exc:
+        raise ReportPdfValidationError(f"报告评分快照无效：{exc}") from exc
 
 
 def validate_report_pdf_bytes(pdf_bytes: bytes) -> None:
@@ -264,13 +307,158 @@ def make_radar_chart(dimensions: list[dict], font_name: str) -> Drawing:
 
 
 async def render_report_pdf_bytes(report: Report) -> bytes:
+    """渲染客户 PDF：优先 Word→PDF（LibreOffice），失败时按配置回退 Chromium。
+
+    客户 PDF 与内部 Word 档案第三部分共用同一套 Word 排版组件，保证
+    字体、深蓝表头、表格列宽、行距和图表在两份文档中一致。
+    """
     settings = get_settings()
+    # Report 可能仍绑定 SQLAlchemy Session。所有属性和关系都必须在当前
+    # 事件循环线程取值；to_thread 只接收已经生成的 DOCX/HTML bytes，避免
+    # 在线程内触发 expire_on_commit 刷新或 submission/lead 懒加载。
+    snapshot = customer_report_snapshot(report)
+    validate_report_html(snapshot)
+    persisted_score = validate_report_score_snapshot(snapshot)
+    fallback_html: bytes | None = None
+    if settings.pdf_docx_render:
+        try:
+            docx_bytes = generate_customer_report_docx(
+                snapshot,
+                snapshot.company_name,
+                score=persisted_score,
+            )
+            pdf_bytes = await asyncio.to_thread(convert_customer_docx_to_pdf, docx_bytes)
+            validate_report_pdf_bytes(pdf_bytes)
+            return pdf_bytes
+        except Exception as exc:
+            logger.warning("Word→PDF 客户报告渲染失败，将评估 Chromium fallback：%s", exc, exc_info=True)
+            if not (settings.pdf_docx_fallback_to_browser and settings.pdf_browser_render):
+                logger.error(
+                    "Word→PDF 失败且 Chromium fallback 不可用：fallback_enabled=%s browser_enabled=%s",
+                    settings.pdf_docx_fallback_to_browser,
+                    settings.pdf_browser_render,
+                )
+                raise
+            logger.info("按配置回退 Chromium HTML→PDF 渲染")
+            fallback_html = render_report_html_attachment(snapshot)
     if not settings.pdf_browser_render:
-        raise ReportPdfValidationError("浏览器 PDF 渲染未启用，已阻止发送简化版报告")
-    validate_report_html(report)
-    pdf_bytes = await asyncio.to_thread(render_report_pdf_bytes_with_browser, report)
+        raise ReportPdfValidationError("Word 与浏览器 PDF 渲染均未启用，已阻止发送报告")
+    if fallback_html is None:
+        fallback_html = render_report_html_attachment(snapshot)
+    pdf_bytes = await asyncio.to_thread(render_report_pdf_bytes_with_browser_html, fallback_html)
     validate_report_pdf_bytes(pdf_bytes)
     return pdf_bytes
+
+
+def libreoffice_executable() -> str:
+    configured = str(get_settings().libreoffice_executable or "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        resolved = shutil.which(configured) or (str(configured_path) if configured_path.is_file() else None)
+        if resolved:
+            return resolved
+        raise RuntimeError(f"LIBREOFFICE_EXECUTABLE 指向不可用的文件或命令：{configured}")
+
+    for command in ("libreoffice", "soffice"):
+        resolved = shutil.which(command)
+        if resolved:
+            return resolved
+
+    candidates = [
+        "C:/Program Files/LibreOffice/program/soffice.exe",
+        "C:/Program Files/LibreOffice/program/soffice.com",
+        "C:/Program Files (x86)/LibreOffice/program/soffice.exe",
+        "C:/Program Files (x86)/LibreOffice/program/soffice.com",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return str(candidate)
+    raise RuntimeError("未找到 LibreOffice（soffice），无法执行 Word→PDF 转换")
+
+
+def convert_customer_docx_to_pdf(docx_bytes: bytes) -> bytes:
+    """把已构建的客户 DOCX bytes 用 LibreOffice Writer 转成 PDF。
+
+    每个任务使用独立临时目录与独立 LibreOffice 用户配置目录
+    （UserInstallation），避免并发任务争用同一 profile 导致转换失败；
+    转换结束（含失败）后由 TemporaryDirectory 清理全部临时文件。
+    """
+    settings = get_settings()
+    soffice = libreoffice_executable()
+    with tempfile.TemporaryDirectory(prefix="report-docx-pdf-") as tmp:
+        directory = Path(tmp)
+        input_dir = directory / "input"
+        output_dir = directory / "output"
+        profile_dir = directory / "lo-profile"
+        input_dir.mkdir()
+        output_dir.mkdir()
+        profile_dir.mkdir()
+        docx_path = input_dir / "customer-report.docx"
+        docx_path.write_bytes(docx_bytes)
+        profile_uri = profile_dir.as_uri()
+        command = [
+            soffice,
+            "--headless",
+            "--invisible",
+            "--norestore",
+            "--nodefault",
+            "--nolockcheck",
+            "--nofirststartwizard",
+            f"-env:UserInstallation={profile_uri}",
+            "--convert-to",
+            "pdf:writer_pdf_Export",
+            "--outdir",
+            str(output_dir),
+            str(docx_path),
+        ]
+        logger.info(
+            "开始 LibreOffice Writer 客户报告转换：executable=%s timeout=%ss",
+            Path(soffice).name,
+            settings.libreoffice_timeout,
+        )
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=settings.libreoffice_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.error("LibreOffice Word→PDF 转换超时：timeout=%ss", settings.libreoffice_timeout)
+            raise RuntimeError(f"LibreOffice Word→PDF 转换超时（{settings.libreoffice_timeout} 秒）") from exc
+        pdf_path = output_dir / f"{docx_path.stem}.pdf"
+        stdout = (getattr(result, "stdout", "") or "").strip()[-1000:]
+        stderr = (getattr(result, "stderr", "") or "").strip()[-1000:]
+        if result.returncode != 0 or not pdf_path.exists():
+            logger.error(
+                "LibreOffice Word→PDF 转换失败：code=%s output_exists=%s stdout=%r stderr=%r",
+                result.returncode,
+                pdf_path.exists(),
+                stdout,
+                stderr,
+            )
+            raise RuntimeError(
+                "LibreOffice Word→PDF 转换失败: "
+                f"code={result.returncode}, output_exists={pdf_path.exists()}, "
+                f"stdout={stdout!r}, stderr={stderr!r}"
+            )
+        pdf_bytes = pdf_path.read_bytes()
+        logger.info(
+            "LibreOffice Writer 客户报告转换完成：pdf_bytes=%s stdout=%r stderr=%r",
+            len(pdf_bytes),
+            stdout,
+            stderr,
+        )
+        return pdf_bytes
+
+
+def render_report_pdf_bytes_docx(report: Report) -> bytes:
+    """同步兼容入口；正式异步管道会先快照 ORM，再仅在线程中转换 bytes。"""
+    snapshot = customer_report_snapshot(report)
+    docx_bytes = generate_customer_report_docx(snapshot, snapshot.company_name)
+    return convert_customer_docx_to_pdf(docx_bytes)
 
 
 def browser_executable() -> str:
@@ -292,7 +480,8 @@ def browser_executable() -> str:
     raise RuntimeError("未找到 Chrome/Edge/Chromium，无法使用浏览器渲染 PDF")
 
 
-def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
+def render_report_pdf_bytes_with_browser_html(html_bytes: bytes) -> bytes:
+    """使用 Chromium 打印已经在调用线程生成的自包含 HTML bytes。"""
     settings = get_settings()
     browser = browser_executable()
     with tempfile.TemporaryDirectory(prefix="report-pdf-") as tmp:
@@ -302,7 +491,7 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
         # 已经由后端根据同一份已校验的 report.html_content 生成，使用它作为
         # 本地、自包含的打印源可以消除这条异步链路。
         html_path = Path(tmp) / "report.html"
-        html_path.write_bytes(render_report_html_attachment(report))
+        html_path.write_bytes(html_bytes)
         pdf_path = Path(tmp) / "report.pdf"
         profile_path = Path(tmp) / "profile"
         command = [
@@ -350,6 +539,12 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
                 f"浏览器打印 PDF 失败: code={result.returncode}, stderr={stderr}{hint}"
             )
         return pdf_path.read_bytes()
+
+
+def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
+    """同步兼容入口；正式异步管道不会把 ORM Report 传入后台线程。"""
+    snapshot = customer_report_snapshot(report)
+    return render_report_pdf_bytes_with_browser_html(render_report_html_attachment(snapshot))
 
 
 def render_report_pdf_bytes_fallback(report: Report) -> bytes:
