@@ -53,6 +53,49 @@ button {
   backdrop-filter: blur(14px);
 }
 
+.viewport-notice {
+  position: fixed;
+  top: 84px;
+  left: 50%;
+  z-index: 40;
+  width: min(calc(100% - 40px), 620px);
+  transform: translate(-50%, -10px);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px 12px 18px;
+  border: 1px solid rgba(88, 72, 200, 0.22);
+  border-radius: 12px;
+  color: #2f2b69;
+  background: rgba(247, 250, 255, 0.97);
+  box-shadow: 0 12px 28px rgba(17, 24, 39, 0.14);
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.viewport-notice.is-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.viewport-notice button {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #4f46a8;
+  background: rgba(88, 72, 200, 0.1);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .nav-shell {
   width: min(100% - 96px, var(--max-width));
   height: 72px;

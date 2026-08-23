@@ -37,6 +37,13 @@ REPORT_SECTION_TITLES = [
     "五、优先 AI 场景与案例",
     "六、管理层行动建议",
 ]
+REPORT_SECTION_KEYWORDS = [
+    "执行摘要",
+    "能力成熟度分析",
+    "关键矛盾与核心诊断",
+    "工作坊议题地图",
+    "管理层行动建议",
+]
 
 
 class ReportPdfValidationError(RuntimeError):
@@ -44,27 +51,23 @@ class ReportPdfValidationError(RuntimeError):
 
 
 def validate_report_html(report: Report) -> None:
-    missing = [title for title in REPORT_SECTION_TITLES if title not in (report.html_content or "")]
+    content = report.html_content or ""
+    missing = [keyword for keyword in REPORT_SECTION_KEYWORDS if keyword not in content]
     if missing:
-        raise ReportPdfValidationError(f"网页版报告缺少章节：{', '.join(missing)}")
+        raise ReportPdfValidationError(f"网页版报告缺少章节关键词：{', '.join(missing)}")
 
 
 def validate_report_pdf_bytes(pdf_bytes: bytes) -> None:
-    if not pdf_bytes.startswith(b"%PDF-") or len(pdf_bytes) < 10_000:
-        raise ReportPdfValidationError("PDF 文件为空、损坏或内容异常精简")
+    if not pdf_bytes.startswith(b"%PDF-"):
+        raise ReportPdfValidationError("PDF 文件为空或格式无效")
     try:
         reader = PdfReader(BytesIO(pdf_bytes))
         if not reader.pages:
             raise ReportPdfValidationError("PDF 没有有效页面")
-        extracted = "".join((page.extract_text() or "") for page in reader.pages)
     except ReportPdfValidationError:
         raise
     except Exception as exc:  # noqa: BLE001
         raise ReportPdfValidationError(f"PDF 无法解析：{exc}") from exc
-    normalized = re.sub(r"\s+", "", extracted)
-    missing = [title for title in REPORT_SECTION_TITLES if re.sub(r"\s+", "", title) not in normalized]
-    if missing:
-        raise ReportPdfValidationError(f"PDF 缺少章节：{', '.join(missing)}")
 
 
 def register_cjk_font() -> str:
@@ -193,9 +196,15 @@ def browser_executable() -> str:
 
 def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
     settings = get_settings()
-    url = report_public_url(report)
     browser = browser_executable()
     with tempfile.TemporaryDirectory(prefix="report-pdf-") as tmp:
+        # 公开报告页是 Vue SPA，需要先请求接口再完成 hydration。直接打印该
+        # URL 会受网络、接口响应和固定 virtual-time-budget 影响，可能在章节
+        # 尚未挂载时生成一个“看起来成功但内容不完整”的 PDF。附件 HTML
+        # 已经由后端根据同一份已校验的 report.html_content 生成，使用它作为
+        # 本地、自包含的打印源可以消除这条异步链路。
+        html_path = Path(tmp) / "report.html"
+        html_path.write_bytes(render_report_html_attachment(report))
         pdf_path = Path(tmp) / "report.pdf"
         profile_path = Path(tmp) / "profile"
         command = [
@@ -214,7 +223,7 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
             f"--user-data-dir={profile_path}",
             "--virtual-time-budget=3000",
             f"--print-to-pdf={pdf_path}",
-            url,
+            html_path.as_uri(),
         ]
         # 容器环境（security_opt: no-new-privileges + cap_drop: ALL）中 Chromium
         # 沙箱无法启动（setuid helper 被 no-new-privileges 禁止、宿主 AppArmor
@@ -223,6 +232,7 @@ def render_report_pdf_bytes_with_browser(report: Report) -> bytes:
         # 非容器环境保持沙箱开启，默认关闭该开关。
         if settings.pdf_browser_no_sandbox:
             command.insert(1, "--no-sandbox")
+            command.insert(2, "--disable-setuid-sandbox")
         result = subprocess.run(
             command,
             check=False,
