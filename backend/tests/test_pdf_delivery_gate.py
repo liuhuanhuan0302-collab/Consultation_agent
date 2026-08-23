@@ -1,6 +1,8 @@
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.request import url2pathname
+from urllib.parse import urlparse
 
 from app.config import Settings
 from app.models import Report
@@ -15,14 +17,20 @@ def test_report_html_must_contain_every_customer_section():
         validate_report_html(report)
 
 
-def test_tiny_or_invalid_pdf_is_never_delivered():
-    with pytest.raises(ReportPdfValidationError, match="损坏或内容异常精简"):
+def test_unparseable_pdf_is_never_delivered():
+    """不以文件大小判断内容，格式无法解析时仍然阻止发送。"""
+    with pytest.raises(ReportPdfValidationError, match="PDF 无法解析"):
         validate_report_pdf_bytes(b"%PDF-1.7\n")
 
 
 def test_no_sandbox_flag_adds_launch_argument(monkeypatch, tmp_path):
     """容器环境开启 PDF_BROWSER_NO_SANDBOX 后，Chromium 以 --no-sandbox 启动。"""
-    report = Report(submission_id=1, title="测试", html_content="<p>ok</p>", public_token="t")
+    report = Report(
+        submission_id=1,
+        title="测试",
+        html_content="<h2>一、执行摘要</h2>",
+        public_token="t",
+    )
     fake_browser = tmp_path / "fake-chrome"
     fake_browser.write_text("")
     monkeypatch.setattr(pdf_service, "browser_executable", lambda: str(fake_browser))
@@ -36,6 +44,10 @@ def test_no_sandbox_flag_adds_launch_argument(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         captured["command"] = command
         pdf_arg = next(arg for arg in command if arg.startswith("--print-to-pdf="))
+        html_url = command[-1]
+        assert html_url.startswith("file://")
+        html_path = Path(url2pathname(urlparse(html_url).path))
+        assert "一、执行摘要" in html_path.read_text(encoding="utf-8")
         Path(pdf_arg.split("=", 1)[1]).write_bytes(b"%PDF-1.7 placeholder")
         return SimpleNamespace(returncode=0, stderr="")
 
@@ -43,6 +55,7 @@ def test_no_sandbox_flag_adds_launch_argument(monkeypatch, tmp_path):
 
     assert pdf_service.render_report_pdf_bytes_with_browser(report) == b"%PDF-1.7 placeholder"
     assert "--no-sandbox" in captured["command"]
+    assert "--disable-setuid-sandbox" in captured["command"]
 
 
 def test_sandbox_failure_error_hints_no_sandbox_flag(monkeypatch, tmp_path):

@@ -8,10 +8,53 @@ import { getNextTabIndex, setUrlParameter } from "./utils/interactions.js";
 const menuToggle = /** @type {HTMLButtonElement | null} */ (document.querySelector(".menu-toggle"));
 const mobilePanel = /** @type {HTMLElement | null} */ (document.querySelector(".mobile-panel"));
 const siteHeader = document.querySelector(".site-header");
+const viewportNotice = /** @type {HTMLElement | null} */ (document.querySelector("[data-viewport-notice]"));
 const pageRequestController = new AbortController();
 const founderLetter = /** @type {HTMLElement | null} */ (document.querySelector("[data-founder-letter]"));
 const FOUNDER_LETTER_STORAGE_KEY = "youkun-founder-letter-dismissed";
+const VIEWPORT_NOTICE_STORAGE_KEY = "youkun-viewport-notice-dismissed";
 let founderLetterLastFocus = /** @type {HTMLElement | null} */ (null);
+let viewportNoticeDismissedInMemory = false;
+
+function hasDismissedViewportNotice() {
+  if (viewportNoticeDismissedInMemory) return true;
+  try {
+    return window.sessionStorage.getItem(VIEWPORT_NOTICE_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function dismissViewportNotice() {
+  viewportNoticeDismissedInMemory = true;
+  try {
+    window.sessionStorage.setItem(VIEWPORT_NOTICE_STORAGE_KEY, "true");
+  } catch {
+    // Private browsing may deny storage; the in-memory state still prevents repeats.
+  }
+}
+
+function isDesktopLikeNarrowViewport() {
+  const narrowViewport = window.matchMedia("(max-width: 1120px)").matches;
+  const finePointer = window.matchMedia("(pointer: fine)").matches;
+  const hoverAvailable = window.matchMedia("(hover: hover)").matches;
+  return narrowViewport && finePointer && hoverAvailable;
+}
+
+function showViewportNoticeIfNeeded() {
+  if (!viewportNotice || hasDismissedViewportNotice() || !isDesktopLikeNarrowViewport()) return;
+  viewportNotice.hidden = false;
+  viewportNotice.classList.add("is-visible");
+}
+
+if (viewportNotice) {
+  viewportNotice.querySelector("[data-viewport-notice-close]")?.addEventListener("click", () => {
+    dismissViewportNotice();
+    viewportNotice.hidden = true;
+    viewportNotice.classList.remove("is-visible");
+  });
+  window.setTimeout(showViewportNoticeIfNeeded, 180);
+}
 
 function hasDismissedFounderLetter() {
   try {
