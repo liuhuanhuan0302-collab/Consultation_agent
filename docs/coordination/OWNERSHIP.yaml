@@ -2,6 +2,91 @@ version: 1
 policy: single-writer
 orchestrator: codex
 active_leases:
+  - lease_id: lease-turn-0010
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0010
+    issue_id: I-080
+    writer: delegated_customer_pdf_worker
+    status: released
+    owned_paths:
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/app/core/config.py
+      - backend/Dockerfile
+      - backend/.env.example
+      - .env.production.example
+      - .env.staging.example
+      - backend/ARCHITECTURE.md
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/tests/test_pdf_delivery_gate.py
+      - backend/tests/test_lead_export_structure.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0010-handoff.md
+    forbidden_paths:
+      - backend/app/api/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/email_service.py
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
+  - lease_id: lease-turn-0011
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0011
+    issue_id: I-080
+    writer: delegated_customer_pdf_worker
+    status: released
+    owned_paths:
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/Dockerfile
+      - backend/deploy/fontconfig/99-consultation-agent-fonts.conf
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/ARCHITECTURE.md
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0011-handoff.md
+    forbidden_paths:
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/email_service.py
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
+  - lease_id: lease-turn-0012
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0012
+    issue_id: I-080
+    writer: audit_pdf_libreoffice
+    status: active
+    owned_paths:
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/Dockerfile
+      - backend/deploy/fontconfig/99-consultation-agent-fonts.conf
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/ARCHITECTURE.md
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0012-handoff.md
+    forbidden_paths:
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/email_service.py
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
   - lease_id: lease-turn-0009
     run_id: backend-architecture-hardening-20260822
     turn_id: TURN-0009

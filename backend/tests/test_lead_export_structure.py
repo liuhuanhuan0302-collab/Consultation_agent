@@ -7,7 +7,11 @@ from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
-from app.service.lead_export_service import FONT_NAME, generate_lead_export_docx
+from app.service.lead_export_service import (
+    FONT_NAME,
+    generate_customer_report_docx,
+    generate_lead_export_docx,
+)
 
 
 def _lead() -> SimpleNamespace:
@@ -52,6 +56,7 @@ def _report() -> SimpleNamespace:
         "researched_at": "2026-08-22T14:00:00",
     }
     summary = {
+        "score": {"total": 120, "max_score": 240, "score_rate": 0.5},
         "dimensions": [
             {"module_code": "M01", "module_name": "以用户/客户为中心", "score_rate": 0.25},
             {"module_code": "M02", "module_name": "简化业务", "score_rate": 0.61},
@@ -138,3 +143,57 @@ def test_lead_export_does_not_include_unsent_report_snapshot() -> None:
 
     assert "客户最终诊断报告尚未发送" in text
     assert "一、执行摘要" not in text
+
+
+def _final_report_layout_signature(document: Document) -> tuple:
+    report_tables = [
+        table
+        for table in document.tables
+        if table.rows and table.rows[0].cells and table.rows[0].cells[0].text in {"序号", "核心结论"}
+    ]
+    table_signatures = []
+    for table in report_tables:
+        layout = table._tbl.tblPr.find(qn("w:tblLayout"))
+        header_properties = table.rows[0]._tr.get_or_add_trPr()
+        header_shading = table.rows[0].cells[0]._tc.tcPr.find(qn("w:shd"))
+        table_signatures.append(
+            (
+                tuple(int(column.get(qn("w:w"))) for column in table._tbl.tblGrid),
+                layout.get(qn("w:type")) if layout is not None else None,
+                header_properties.find(qn("w:tblHeader")) is not None,
+                header_shading.get(qn("w:fill")) if header_shading is not None else None,
+                tuple(
+                    (
+                        run.font.name,
+                        run.font.size.pt if run.font.size else None,
+                        run.bold,
+                    )
+                    for run in table.rows[0].cells[0].paragraphs[0].runs
+                ),
+            )
+        )
+    heading_signatures = []
+    for paragraph in document.paragraphs:
+        if paragraph.text in {"一、执行摘要", "二、能力成熟度分析", "六、管理层行动建议"}:
+            run = paragraph.runs[0]
+            heading_signatures.append(
+                (
+                    paragraph.text,
+                    run.font.name,
+                    run.font.size.pt if run.font.size else None,
+                    str(run.font.color.rgb),
+                    run.bold,
+                    paragraph.paragraph_format.keep_with_next,
+                )
+            )
+    return tuple(table_signatures), tuple(heading_signatures), len(document.inline_shapes)
+
+
+def test_internal_part_three_and_customer_docx_share_final_layout_signature() -> None:
+    report = _report()
+    internal = Document(
+        BytesIO(generate_lead_export_docx(_lead(), _submission(), report, final_report_sent=True))
+    )
+    customer = Document(BytesIO(generate_customer_report_docx(report, "示例科技有限公司")))
+
+    assert _final_report_layout_signature(internal) == _final_report_layout_signature(customer)

@@ -86,7 +86,8 @@ public.py: submit_questionnaire (HTTP mapping, X-Session-Token ownership, rate l
       → company_research.research_company (fail-closed, see below)
       → reporting.generate_report_content (semaphore-limited, structured template
         validated with up to 3 correction attempts)
-      → pdf_service.render_report_pdf_bytes (validated)
+      → pdf_service.render_report_pdf_bytes (Word→LibreOffice→PDF，
+        失败时按配置回退 Chromium HTML→PDF，均经 PDF 校验)
       → email_service.send_report_pdf_email
 ```
 
@@ -265,8 +266,20 @@ first attempt; only after `max_attempts` does the job go to manual review.
 - Report generation validates the fixed six-section template and retries up to
   3 times with the previous validation feedback; an incomplete report is marked
   `failed` and goes to manual review instead of being delivered.
-- The PDF delivery gate requires every customer section to be present and
-  rejects corrupt or abnormally small PDFs before emailing.
+- The PDF delivery gate validates the final HTML snapshot before rendering,
+  then checks only the `%PDF-` header, parser readability and a positive page
+  count. It deliberately does not use byte-size thresholds or extracted Chinese
+  text because neither is a reliable proxy for visual report completeness.
+- Customer PDF rendering prefers Word → LibreOffice Headless conversion
+  (`pdf_service.convert_customer_docx_to_pdf`, Writer filter
+  `pdf:writer_pdf_Export`), reusing the Word layout
+  components of the internal lead export so both documents share fonts,
+  navy table headers, column widths, line spacing and charts. Chromium
+  HTML → PDF remains a config-controlled fallback (`PDF_DOCX_RENDER`,
+  `PDF_DOCX_FALLBACK_TO_BROWSER`) for environments without LibreOffice. ORM
+  report values and the fallback HTML are snapshotted before worker-thread
+  conversion; each LibreOffice process gets an isolated temporary input/output
+  directory and user profile with a bounded timeout.
 - Container PDF rendering: Docker services run with `no-new-privileges` and
   `cap_drop: ALL`, so the Chromium sandbox cannot start (setuid helper is
   blocked and Ubuntu 23.10+ hosts restrict unprivileged user namespaces).

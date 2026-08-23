@@ -54,6 +54,18 @@ class Settings(BaseSettings):
         default=False,
         description="Chromium 加 --no-sandbox 启动；容器环境（cap_drop/no-new-privileges）必须开启",
     )
+    pdf_docx_render: bool = Field(default=True, description="是否优先用 Word→PDF（LibreOffice）渲染客户报告")
+    pdf_docx_fallback_to_browser: bool = Field(
+        default=True,
+        description="Word→PDF 转换失败时是否回退 Chromium HTML→PDF",
+    )
+    libreoffice_executable: str | None = Field(default=None, description="LibreOffice（soffice）可执行文件路径，留空自动探测")
+    libreoffice_timeout: int = Field(
+        default=180,
+        ge=10,
+        le=600,
+        description="LibreOffice 单次转换超时秒数（10-600）",
+    )
 
     smtp_host: str | None = Field(default=None, description="SMTP 服务器地址")
     smtp_port: int = Field(default=465, description="SMTP SSL 端口")
