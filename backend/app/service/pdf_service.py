@@ -27,6 +27,7 @@ from app.service.report_content import sanitize_report_content
 
 
 TAG_RE = re.compile(r"<[^>]+>")
+REPORT_FILENAME_INVALID_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 logger = logging.getLogger(__name__)
 
 REPORT_SECTION_TITLES = [
@@ -48,6 +49,24 @@ REPORT_SECTION_KEYWORDS = [
 
 class ReportPdfValidationError(RuntimeError):
     """最终 PDF 与固定报告模板不一致，禁止发送给客户。"""
+
+
+def report_company_name(report: Report) -> str:
+    submission = getattr(report, "submission", None)
+    lead = getattr(submission, "lead", None)
+    company_name = str(getattr(lead, "company_name", "") or "").strip()
+    if company_name:
+        return company_name
+    return str(report.title or "企业").split(" AI 原生转型诊断报告", 1)[0].strip() or "企业"
+
+
+def customer_report_filename(report: Report) -> str:
+    """返回客户可读的附件名，不暴露公开报告 token。"""
+    company_name = REPORT_FILENAME_INVALID_CHARS_RE.sub("_", report_company_name(report))
+    company_name = company_name.strip(" ._")
+    if not company_name:
+        return "企业AI原生转型诊断报告.pdf"
+    return f"{company_name}_AI原生转型诊断报告.pdf"
 
 
 def validate_report_html(report: Report) -> None:
@@ -299,47 +318,35 @@ def render_report_html_attachment(report: Report) -> bytes:
         summary = json.loads(report.summary_json or "{}")
     except json.JSONDecodeError:
         summary = {}
+    company_name = report_company_name(report)
+    report_number = f"RPT-{report.id:06d}" if isinstance(report.id, int) else "RPT-UNKNOWN"
+    report_date = report.created_at.strftime("%Y-%m-%d") if report.created_at else "-"
     score = summary.get("score") or {}
-    dimensions = summary.get("dimensions") or []
-    public_url = report_public_url(report)
-    cards = ""
-    if score:
-        cards = f"""
-        <section class="score-strip">
-          <div class="score-card"><span>诊断总分</span><strong>{escape(str(score.get("total", "-")))}<em>/{escape(str(score.get("max_score", "-")))}</em></strong></div>
-          <div class="score-card"><span>综合得分率</span><strong>{round(float(score.get("score_rate") or 0) * 100)}<em>%</em></strong></div>
-        </section>
-        """
-    dimension_rows = "".join(
-        f"<tr><td>{escape(str(item.get('module_name') or item.get('module_code') or ''))}</td>"
-        f"<td>{round(float(item.get('score_rate') or 0) * 100)}%</td></tr>"
-        for item in dimensions
-    )
-    dimension_table = f"""
-    <section class="html-section">
-      <h2>维度概览</h2>
-      <table><thead><tr><th>维度</th><th>得分率</th></tr></thead><tbody>{dimension_rows}</tbody></table>
-    </section>
-    """ if dimension_rows else ""
+    score_rate = score.get("score_rate")
+    score_rate_text = "-" if score_rate is None else f"{round(float(score_rate) * 100)}%"
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{escape(report.title)}</title>
+  <title>{escape(company_name)} - AI原生转型诊断报告</title>
   <style>
     body {{ margin: 0; background: #eef3f8; color: #18202f; font-family: "Microsoft YaHei", Arial, sans-serif; }}
     .shell {{ max-width: 1080px; margin: 0 auto; padding: 42px 24px 56px; }}
-    .hero {{ background: linear-gradient(135deg, #0c1f3a, #1a3f60); border-radius: 18px; color: #fff; padding: 42px 48px; }}
+    .hero {{ background: linear-gradient(135deg, #0c1f3a, #1a3f60); border-radius: 18px; color: #fff; padding: 52px 56px; }}
     .hero p {{ color: #b8c7db; margin: 0 0 12px; }}
-    .hero h1 {{ font-size: 32px; line-height: 1.25; margin: 0 0 14px; }}
-    .hero a {{ color: #bfdbfe; }}
+    .hero h1 {{ font-size: 36px; line-height: 1.25; margin: 0 0 10px; }}
+    .hero .subtitle {{ color: #e2e8f0; font-size: 20px; margin-bottom: 30px; }}
+    .report-meta {{ border-top: 1px solid rgba(255,255,255,.25); display: grid; grid-template-columns: 1fr 1fr; gap: 18px 36px; margin: 0; padding-top: 24px; }}
+    .report-meta div {{ display: flex; justify-content: space-between; gap: 24px; }}
+    .report-meta dt {{ color: #b8c7db; }}
+    .report-meta dd {{ margin: 0; color: #fff; font-weight: 700; }}
     .score-strip {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 28px 0; }}
     .score-card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px 26px; }}
     .score-card span {{ color: #94a3b8; display: block; font-size: 12px; font-weight: 700; margin-bottom: 8px; }}
     .score-card strong {{ color: #0f172a; display: block; font-size: 34px; line-height: 1; }}
     .score-card em {{ color: #94a3b8; font-size: 18px; font-style: normal; }}
-    .html-section, .report-html {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; margin-top: 28px; padding: 38px 46px; }}
+    .report-html {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; margin-top: 28px; padding: 38px 46px; page-break-before: always; }}
     h2 {{ border-top: 1px solid #e2e8f0; color: #0f172a; font-size: 20px; margin: 32px 0 16px; padding-top: 24px; }}
     h3 {{ color: #1e293b; font-size: 17px; margin: 22px 0 10px; }}
     p, li {{ color: #475569; font-size: 15px; line-height: 1.85; }}
@@ -350,7 +357,8 @@ def render_report_html_attachment(report: Report) -> bytes:
       .shell {{ padding: 18px; }}
       .hero {{ padding: 28px 24px; }}
       .score-strip {{ grid-template-columns: 1fr; }}
-      .html-section, .report-html {{ padding: 26px 22px; }}
+      .report-meta {{ grid-template-columns: 1fr; }}
+      .report-html {{ padding: 26px 22px; }}
     }}
   </style>
 </head>
@@ -358,11 +366,18 @@ def render_report_html_attachment(report: Report) -> bytes:
   <main class="shell">
     <section class="hero">
       <p>AI 原生企业转型诊断报告</p>
-      <h1>{escape(report.title)}</h1>
-      <p>在线报告：<a href="{escape(public_url)}">{escape(public_url)}</a></p>
+      <h1>{escape(company_name)}</h1>
+      <p class="subtitle">AI 原生转型诊断报告</p>
+      <dl class="report-meta">
+        <div><dt>报告编号</dt><dd>{escape(report_number)}</dd></div>
+        <div><dt>报告日期</dt><dd>{escape(report_date)}</dd></div>
+      </dl>
     </section>
-    {cards}
-    {dimension_table}
+    <section class="score-strip">
+      <div class="score-card"><span>诊断总分</span><strong>{escape(str(score.get("total", "-")))}</strong></div>
+      <div class="score-card"><span>满分</span><strong>{escape(str(score.get("max_score", "-")))}</strong></div>
+      <div class="score-card"><span>综合得分率</span><strong>{escape(score_rate_text)}</strong></div>
+    </section>
     <article class="report-html">{sanitize_report_content(report.html_content)}</article>
   </main>
 </body>

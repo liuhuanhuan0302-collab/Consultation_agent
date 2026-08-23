@@ -1,4 +1,6 @@
+import json
 import pytest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.request import url2pathname
@@ -7,7 +9,12 @@ from urllib.parse import urlparse
 from app.config import Settings
 from app.models import Report
 from app.service import pdf_service
-from app.service.pdf_service import ReportPdfValidationError, validate_report_html, validate_report_pdf_bytes
+from app.service.pdf_service import (
+    ReportPdfValidationError,
+    customer_report_filename,
+    validate_report_html,
+    validate_report_pdf_bytes,
+)
 
 
 def test_report_html_must_contain_every_customer_section():
@@ -21,6 +28,65 @@ def test_unparseable_pdf_is_never_delivered():
     """不以文件大小判断内容，格式无法解析时仍然阻止发送。"""
     with pytest.raises(ReportPdfValidationError, match="PDF 无法解析"):
         validate_report_pdf_bytes(b"%PDF-1.7\n")
+
+
+def test_customer_pdf_template_excludes_internal_lead_and_research_fields():
+    report = SimpleNamespace(
+        id=123,
+        title="江苏芯云电子科技 AI 原生转型诊断报告",
+        created_at=datetime(2026, 8, 23),
+        public_token="public-token",
+        summary_json=json.dumps(
+            {"score": {"total": 80, "max_score": 100, "score_rate": 0.8}},
+            ensure_ascii=False,
+        ),
+        submission=SimpleNamespace(
+            lead=SimpleNamespace(
+                company_name="江苏芯云电子科技",
+                contact_name="张三",
+                phone="13800000000",
+                email="internal@example.com",
+                wechat="internal-wechat",
+                source_code="wechat_mp",
+            )
+        ),
+        html_content=(
+            "<h2>一、执行摘要</h2><h2>二、能力成熟度分析</h2>"
+            "<h2>三、关键矛盾与核心诊断</h2><h2>四、工作坊议题地图</h2>"
+            "<h2>六、管理层行动建议</h2>"
+        ),
+    )
+
+    html = pdf_service.render_report_html_attachment(report).decode("utf-8")
+
+    assert "江苏芯云电子科技" in html
+    assert "RPT-000123" in html
+    assert "2026-08-23" in html
+    assert "诊断总分" in html and "80" in html
+    assert "满分" in html and "100" in html
+    assert "综合得分率" in html and "80%" in html
+    assert "维度概览" not in html
+    assert "在线报告" not in html
+    for internal_label in ("联系人", "手机号", "邮箱", "微信", "来源", "首次查看人", "AI搜索"):
+        assert internal_label not in html
+    for internal_value in ("张三", "13800000000", "internal@example.com", "internal-wechat", "wechat_mp"):
+        assert internal_value not in html
+
+
+def test_customer_report_filename_is_readable_and_safe():
+    report = SimpleNamespace(
+        id=123,
+        title="备用标题",
+        submission=SimpleNamespace(lead=SimpleNamespace(company_name="奥飞/娱乐:*?")),
+    )
+    assert customer_report_filename(report) == "奥飞_娱乐_AI原生转型诊断报告.pdf"
+
+    empty_company = SimpleNamespace(
+        id=124,
+        title="",
+        submission=SimpleNamespace(lead=SimpleNamespace(company_name="<>:/\\|?*")),
+    )
+    assert customer_report_filename(empty_company) == "企业AI原生转型诊断报告.pdf"
 
 
 def test_no_sandbox_flag_adds_launch_argument(monkeypatch, tmp_path):
