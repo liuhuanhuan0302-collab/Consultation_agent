@@ -76,6 +76,39 @@ URLs came from the real search response or that factual sections bind to sources
 - Run independent full regression; mark Docker or production checks unverified if
   they cannot be executed.
 
+### G5. Unify premium customer-report presentation
+
+- Preserve the accepted AI-generated report content while upgrading presentation.
+- Keep internal Word part three, customer DOCX/LibreOffice PDF, Chromium fallback
+  PDF, and online report within one restrained executive-consulting design system.
+- Use the supplied report only as a visual reference; do not copy company-specific
+  content, logos, or confidentiality labels.
+
+### G6. Separate administrator report regeneration from delivery
+
+- Allow administrators to regenerate AI report content from persisted scores and
+  company research without re-running research, generating PDF or sending email.
+- Replace the current report only after the candidate passes existing V2
+  validation; preserve the prior report on failure.
+
+### G7. Lock the approved complete report and safe PDF delivery
+
+- Use one complete customer report-view contract across public/admin HTML,
+  standalone Word, internal Word part three, and the emailed PDF source.
+- Generate customer email PDF only from the customer DOCX; after three failed
+  conversions, send no email and expose an explicit manual retry path.
+- Preserve historical report content/contact snapshots and keep AI-content
+  regeneration separate from delivery.
+
+### G8. Keep lead administration efficient at real viewport sizes
+
+- Keep only common lead filters visible and move complete advanced filtering to
+  one accessible dialog.
+- Adapt list page length to viewport height and provide complete compact page
+  navigation without a manual page-size selector.
+- Maintain a broad questionnaire industry taxonomy and durable project operating
+  notes in the authoritative AGENTS.md.
+
 ## Non-goals
 
 - A global `{code, message, data}` response rewrite.
@@ -145,6 +178,54 @@ post-commit background task.
 Move lead detail, email correction, reroll/research workflow, export audit,
 delivery-state selection, deletion orchestration, and reusable SQL out of
 `admin/leads.py` while preserving permissions and output formats.
+
+### FR-07 Customer report visual contract
+
+- Word and customer DOCX continue to share the same final-report body renderer.
+- Chromium fallback must use explicit A4 print rules and the same navy, restrained
+  red, light-gray, typography, table, and callout hierarchy as Word output.
+- Online presentation must use the same visual vocabulary while remaining
+  responsive.
+- Visual changes must not alter report text, score data, snapshot semantics,
+  sanitization, privacy boundaries, API behavior, or delivery behavior.
+- The customer cover uses the human-approved compact editorial hierarchy:
+  centered gray company line, two-line navy title, restrained red subtitle,
+  wide red rule, wide/shallow five-row gray metadata block, and a small navy
+  closing statement. It contains no confidentiality label or English kicker.
+- The cover is built from editable Word-native elements and follows the approved
+  screenshot, with a dynamic full legal company line, derived short company
+  title, report number and Chinese-formatted date.
+- The report body preserves substantive content while following the supplied
+  reference PDF's restrained consulting system: muted header/red rule, compact
+  footer, navy/red/blue heading ladder, navy-header tables with pale blue-gray
+  rows, pale-red left-rule decision callouts and disciplined whitespace.
+
+### FR-08 Safe report regeneration
+
+- A dedicated administrator action regenerates AI report content only and never
+  reuses the delivery-resume endpoint.
+- Active generation or queued/processing delivery conflicts are rejected.
+- Failed candidate generation leaves the prior HTML, summary and recommendations
+  usable; successful generation invalidates only the derived PDF status.
+- The action records an audit event and does not create or mutate delivery jobs.
+
+### FR-09 Complete report consistency and delivery gate
+
+- Every report surface contains the customer cover, compact score overview,
+  charts, exactly five numbered chapters and the approved contact callout.
+- Renderer-derived maturity judgments may enrich presentation but must not
+  rewrite persisted AI body content.
+- Internal Word preserves its first two sections and embeds the complete customer
+  report as part three with a small internal cover marker.
+- Email delivery accepts only a successful customer-DOCX conversion. Browser PDF
+  fallback must never be attached to customer email.
+- DOCX conversion retries three times; exhaustion produces a visible manual state
+  and an administrator-controlled regenerate-attachment-and-send retry.
+- Regenerate-attachment-and-send must reuse any complete persisted approved body
+  (`generated` or historical `fallback`) and must never re-enter research or AI
+  content generation.
+- Content-only AI regeneration must recover stale in-process reservations after
+  crashes and fence late tasks so an older attempt cannot replace a newer one.
 
 ## Architecture and safety requirements
 

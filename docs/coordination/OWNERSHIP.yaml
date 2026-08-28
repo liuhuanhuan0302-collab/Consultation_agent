@@ -2,6 +2,270 @@ version: 1
 policy: single-writer
 orchestrator: codex
 active_leases:
+  - lease_id: lease-turn-0025
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0025
+    issue_id: I-170
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/repositories/lead_repo.py
+      - backend/app/service/lead_service.py
+      - backend/tests/test_lead_service.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0025-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/schemas/**
+      - backend/app/service/report_queue.py
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
+  - lease_id: lease-turn-0024
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0024
+    issue_id: I-160
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/service/report_queue.py
+      - backend/tests/test_lead_service.py
+      - backend/tests/test_pdf_delivery_gate.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0024-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/app/service/lead_service.py
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
+  - lease_id: lease-turn-0023
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0023
+    issue_id: I-150
+    writer: claude_code
+    status: released
+    owned_paths:
+      - frontend/src/App.vue
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/composables/useQuestionnaire.ts
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0023-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/**
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/components/**
+      - official-website/**
+  - lease_id: lease-turn-0022
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0022
+    issue_id: I-140
+    writer: claude_code
+    status: released
+    owned_paths:
+      - .env.production.example
+      - .env.staging.example
+      - backend/.env.example
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0022-handoff.md
+    forbidden_paths:
+      - backend/app/**
+      - backend/tests/**
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
+
+  - lease_id: lease-turn-0021
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0021
+    issue_id: I-140
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/api/v1/endpoints/public.py
+      - backend/app/core/config.py
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/lead_service.py
+      - backend/app/service/pdf_service.py
+      - backend/app/service/report_content.py
+      - backend/app/service/report_queue.py
+      - backend/app/service/reporting.py
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/tests/test_lead_export_structure.py
+      - backend/tests/test_lead_service.py
+      - backend/tests/test_pdf_delivery_gate.py
+      - backend/tests/test_structured_report.py
+      - backend/tests/test_system_settings.py
+      - backend/ARCHITECTURE.md
+      - backend/.env.example
+      - .env.production.example
+      - .env.staging.example
+      - frontend/src/App.vue
+      - frontend/src/api.ts
+      - frontend/src/components/ReportCharts.vue
+      - frontend/src/components/CustomerReportView.vue
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/composables/useReportView.ts
+      - frontend/src/styles.css
+      - frontend/src/types.ts
+      - frontend/src/utils/reportHtml.ts
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0021-handoff.md
+    forbidden_paths:
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/migrations/**
+      - backend/app/service/email_service.py
+      - backend/Dockerfile
+      - official-website/**
+  - lease_id: lease-turn-0020
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0020
+    issue_id: I-130
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/service/lead_service.py
+      - backend/app/service/reporting.py
+      - backend/tests/test_lead_service.py
+      - backend/tests/test_structured_report.py
+      - backend/ARCHITECTURE.md
+      - frontend/src/App.vue
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0020-handoff.md
+    forbidden_paths:
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/app/core/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/pdf_service.py
+      - backend/app/service/email_service.py
+      - backend/app/service/company_research.py
+      - backend/migrations/**
+      - backend/Dockerfile
+      - official-website/**
+  - lease_id: lease-turn-0019
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0019
+    issue_id: I-120
+    writer: delegated_report_visual_worker
+    status: released
+    owned_paths:
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/tests/test_lead_export_structure.py
+      - frontend/src/App.vue
+      - frontend/src/components/ReportCharts.vue
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0019-handoff.md
+    forbidden_paths:
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/migrations/**
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - official-website/**
+  - lease_id: lease-turn-0018
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0018
+    issue_id: I-110
+    writer: delegated_report_visual_worker
+    status: released
+    owned_paths:
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/tests/test_lead_export_structure.py
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0018-handoff.md
+    forbidden_paths:
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/migrations/**
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - official-website/**
+  - lease_id: lease-turn-0017
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0017
+    issue_id: I-100
+    writer: delegated_report_visual_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/ReportCharts.vue
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0017-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - official-website/**
+  - lease_id: lease-turn-0016
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0016
+    issue_id: I-100
+    writer: delegated_report_visual_worker
+    status: released
+    owned_paths:
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/scripts/generate_customer_report.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/tests/test_lead_export_structure.py
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0016-handoff.md
+    forbidden_paths:
+      - backend/app/service/reporting.py
+      - backend/app/service/report_content.py
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/app/schemas/**
+      - backend/migrations/**
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - official-website/**
   - lease_id: lease-turn-0010
     run_id: backend-architecture-hardening-20260822
     turn_id: TURN-0010
@@ -65,7 +329,7 @@ active_leases:
     turn_id: TURN-0012
     issue_id: I-080
     writer: audit_pdf_libreoffice
-    status: active
+    status: released
     owned_paths:
       - backend/app/service/lead_export_service.py
       - backend/app/service/pdf_service.py
@@ -86,6 +350,110 @@ active_leases:
       - backend/app/service/email_service.py
       - backend/migrations/**
       - frontend/**
+      - official-website/**
+  - lease_id: lease-turn-0013
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0013
+    issue_id: I-090
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/__init__.py
+      - backend/app/api/v1/endpoints/admin/system_settings.py
+      - backend/app/models/__init__.py
+      - backend/app/models/system_setting.py
+      - backend/app/schemas/__init__.py
+      - backend/app/schemas/system_setting.py
+      - backend/app/repositories/__init__.py
+      - backend/app/repositories/system_setting_repo.py
+      - backend/app/service/system_setting_service.py
+      - backend/app/service/reporting.py
+      - backend/app/service/report_content.py
+      - backend/app/service/report_analysis.py
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/migrations/versions/3e7d1b9c5a20_add_report_contact_settings.py
+      - backend/tests/test_system_settings.py
+      - backend/tests/test_structured_report.py
+      - backend/tests/test_report_content.py
+      - backend/tests/test_lead_export_structure.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/ARCHITECTURE.md
+      - frontend/src/App.vue
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0013-handoff.md
+    forbidden_paths:
+      - backend/app/api/v1/endpoints/public.py
+      - backend/app/service/report_queue.py
+      - backend/app/service/email_service.py
+      - backend/app/service/company_research.py
+      - backend/app/core/**
+      - official-website/**
+  - lease_id: lease-turn-0014
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0014
+    issue_id: I-090
+    writer: delegated_report_settings_worker
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/__init__.py
+      - backend/app/api/v1/endpoints/admin/system_settings.py
+      - backend/app/models/__init__.py
+      - backend/app/models/system_setting.py
+      - backend/app/schemas/__init__.py
+      - backend/app/schemas/system_setting.py
+      - backend/app/repositories/__init__.py
+      - backend/app/repositories/system_setting_repo.py
+      - backend/app/service/system_setting_service.py
+      - backend/app/service/reporting.py
+      - backend/app/service/report_content.py
+      - backend/app/service/report_analysis.py
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/pdf_service.py
+      - backend/migrations/versions/3e7d1b9c5a20_add_report_contact_settings.py
+      - backend/tests/test_system_settings.py
+      - backend/tests/test_structured_report.py
+      - backend/tests/test_report_content.py
+      - backend/tests/test_lead_export_structure.py
+      - backend/tests/test_customer_docx_pdf.py
+      - backend/ARCHITECTURE.md
+      - frontend/src/App.vue
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0014-handoff.md
+    forbidden_paths:
+      - backend/app/api/v1/endpoints/public.py
+      - backend/app/service/report_queue.py
+      - backend/app/service/email_service.py
+      - backend/app/service/company_research.py
+      - backend/app/core/**
+      - official-website/**
+  - lease_id: lease-turn-0015
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0015
+    issue_id: I-090
+    writer: delegated_report_settings_worker
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/system_settings.py
+      - backend/tests/test_system_settings.py
+      - backend/tests/test_migration_chain.py
+      - frontend/src/composables/useAdmin.ts
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0015-handoff.md
+    forbidden_paths:
+      - backend/app/service/**
+      - backend/app/models/**
+      - backend/app/repositories/**
+      - backend/migrations/**
+      - frontend/src/App.vue
       - official-website/**
   - lease_id: lease-turn-0009
     run_id: backend-architecture-hardening-20260822

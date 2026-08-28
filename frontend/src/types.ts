@@ -196,6 +196,15 @@ export type GatewayConfig = {
   updated_at: string | null;
 };
 
+export type ReportContactSettings = {
+  contact_name: string;
+  phone: string;
+  wechat: string;
+  email: string;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
 export type User = {
   id: number;
   email: string;

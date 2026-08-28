@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     )
     pdf_docx_render: bool = Field(default=True, description="是否优先用 Word→PDF（LibreOffice）渲染客户报告")
     pdf_docx_fallback_to_browser: bool = Field(
-        default=True,
-        description="Word→PDF 转换失败时是否回退 Chromium HTML→PDF",
+        default=False,
+        description="兼容旧环境的浏览器 PDF 开关；客户邮件附件不会使用此回退",
     )
     libreoffice_executable: str | None = Field(default=None, description="LibreOffice（soffice）可执行文件路径，留空自动探测")
     libreoffice_timeout: int = Field(

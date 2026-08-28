@@ -21,7 +21,8 @@ backend/app/
 │           ├── channels.py     # Channels
 │           ├── reports.py      # Report detail
 │           ├── analytics.py    # Dashboard and tracking events
-│           └── api_gateway.py  # Search/LLM gateway config and connectivity tests
+│           ├── api_gateway.py  # Search/LLM gateway config and connectivity tests
+│           └── system_settings.py # Administrator-managed report contact settings
 ├── service/                # Business workflows and external integrations
 ├── repositories/           # SQLAlchemy queries and persistence operations
 ├── models/                 # ORM entities grouped by domain
@@ -65,6 +66,7 @@ Simple read-only CRUD endpoints may call a repository directly when adding a ser
 | Channels | `models/channel.py` | `schemas/channel.py` | `repositories/qr_code_repo.py` |
 | Analytics and audit | `models/audit.py` | `schemas/analytics.py` | admin analytics endpoints |
 | API gateway | `models/gateway.py` | `schemas/gateway.py` | `service/api_gateway_service.py` |
+| System settings | `models/system_setting.py` | `schemas/system_setting.py` | `repositories/system_setting_repo.py`, `service/system_setting_service.py` |
 
 ## Call chains
 
@@ -85,9 +87,10 @@ public.py: submit_questionnaire (HTTP mapping, X-Session-Token ownership, rate l
   → service/report_queue.py: process_report_delivery_job
       → company_research.research_company (fail-closed, see below)
       → reporting.generate_report_content (semaphore-limited, structured template
-        validated with up to 3 correction attempts)
-      → pdf_service.render_report_pdf_bytes (Word→LibreOffice→PDF，
-        失败时按配置回退 Chromium HTML→PDF，均经 PDF 校验)
+        validated with up to 3 correction attempts; captures report format version
+        and the current global report-contact settings in `summary_json`)
+      → pdf_service.render_report_pdf_bytes (客户 DOCX→LibreOffice→PDF，
+        单次任务最多转换 3 次；禁止以 Chromium HTML PDF 作为邮件附件)
       → email_service.send_report_pdf_email
 ```
 
@@ -157,6 +160,50 @@ non-empty company name, builds the CSV snapshot, marks each row exported
 Concurrent one-click exports cannot double-export: the row locks make the
 second transaction see zero unexported rows and return the "没有未导出" message
 without creating an empty batch.
+
+### Report format snapshots
+
+`reports.summary_json` is the immutable rendering contract for a generated
+report. New reports use `report_format_version = 2` and include a
+`report_contact` snapshot copied from the singleton `report_contact_settings`
+row. Empty contact fields are omitted. The language model never receives this
+renderer-only metadata. HTML is generated from the same payload and persisted;
+customer Word, converted PDF, email attachment and later internal export all
+render that stored HTML instead of reading live settings. Changing the global
+contact therefore affects only new or explicitly regenerated reports.
+
+`service/report_content.py:build_report_presentation_html` is the shared,
+non-persistent presentation layer for public HTML, administrator HTML and both
+Word exports. It combines the immutable HTML/summary snapshot with deterministic
+M01-M09 renderer notes, the approved scene note/numbering and the historical
+contact callout without rewriting the AI-authored body. The standalone customer
+Word and part three of the internal Word then reuse the same complete customer
+document structure: cover, compact score strip, charts, five chapters and
+contact callout.
+
+Reports without a format version remain legacy snapshots: their existing
+"优先 AI 场景与案例" and "管理层行动建议" sections continue to validate and
+export unchanged. Version 2 uses "优先 AI 场景建议", omits management actions,
+and appends an unnumbered contact block only when its snapshot has values.
+
+### Administrator report regeneration
+
+`POST /api/admin/leads/{lead_id}/regenerate-report` is an administrator-only,
+content-only workflow. The endpoint reserves an existing usable report and
+schedules `lead_service.run_report_regeneration_task`; it never enters the
+delivery queue. The task reuses the scored submission and the persisted,
+evidence-validated company-research snapshot. `reporting.generate_report_candidate`
+calls the LLM and runs the existing V2 structural validation without mutating
+the stored report. Only a validated candidate is applied in one transaction,
+after a second active-delivery conflict check. Success replaces HTML, summary,
+recommendations and advisor messages and marks the former PDF snapshot pending;
+failure restores the prior usable status and keeps all prior report content.
+Neither path generates a PDF, creates or changes a delivery job, or sends email.
+
+`POST /api/admin/leads/{lead_id}/retry-attachment-delivery` is a separate
+administrator action for a reviewed, already-generated report. It rejects sent
+or active jobs, resets only the PDF/delivery state and queues DOCX→PDF→email;
+it never regenerates AI content.
 
 ### Legacy data adoption
 
@@ -270,16 +317,18 @@ first attempt; only after `max_attempts` does the job go to manual review.
   then checks only the `%PDF-` header, parser readability and a positive page
   count. It deliberately does not use byte-size thresholds or extracted Chinese
   text because neither is a reliable proxy for visual report completeness.
-- Customer PDF rendering prefers Word → LibreOffice Headless conversion
+- Customer email PDF rendering requires Word → LibreOffice Headless conversion
   (`pdf_service.convert_customer_docx_to_pdf`, Writer filter
   `pdf:writer_pdf_Export`), reusing the Word layout
   components of the internal lead export so both documents share fonts,
-  navy table headers, column widths, line spacing and charts. Chromium
-  HTML → PDF remains a config-controlled fallback (`PDF_DOCX_RENDER`,
-  `PDF_DOCX_FALLBACK_TO_BROWSER`) for environments without LibreOffice. ORM
-  report values and the fallback HTML are snapshotted before worker-thread
-  conversion; each LibreOffice process gets an isolated temporary input/output
-  directory and user profile with a bounded timeout.
+  navy table headers, column widths, line spacing and charts. Conversion and PDF
+  validation are attempted exactly three times. Exhaustion marks the delivery
+  failed/manual, sends no email and exposes the explicit administrator retry
+  action. `PDF_DOCX_FALLBACK_TO_BROWSER` is retained only as a legacy/browser
+  preview compatibility setting and cannot affect customer attachments. ORM
+  report values are snapshotted before worker-thread conversion; each
+  LibreOffice process gets an isolated temporary input/output directory and user
+  profile with a bounded timeout.
 - Container PDF rendering: Docker services run with `no-new-privileges` and
   `cap_drop: ALL`, so the Chromium sandbox cannot start (setuid helper is
   blocked and Ubuntu 23.10+ hosts restrict unprivileged user namespaces).

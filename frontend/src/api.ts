@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, CaseStudy, ChannelSource, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, Report, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, Report, ReportContactSettings, ScoreResponse, User } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -120,6 +120,10 @@ export const api = {
     }),
   resumeReportDelivery: (leadId: number) =>
     request<{ message: string }>(`/api/admin/leads/${leadId}/resume-delivery`, { method: "POST" }),
+  retryReportAttachmentDelivery: (leadId: number) =>
+    request<{ message: string }>(`/api/admin/leads/${leadId}/retry-attachment-delivery`, { method: "POST" }),
+  regenerateLeadReport: (leadId: number) =>
+    request<{ status: string; message: string }>(`/api/admin/leads/${leadId}/regenerate-report`, { method: "POST" }),
   updateLeadDiagnosticEmail: (leadId: number, email: string) =>
     request<{ message: string }>(`/api/admin/leads/${leadId}/diagnostic-email`, {
       method: "PUT",
@@ -135,6 +139,12 @@ export const api = {
     }),
   exportBatches: () => request<ExportBatch[]>("/api/admin/leads/export-batches"),
   downloadExportBatch: (batchId: number) => downloadFile(`/api/admin/leads/export-batches/${batchId}/download`, `export-batch-${batchId}.csv`),
+  reportContactSettings: () => request<ReportContactSettings>("/api/admin/system-settings/report-contact"),
+  saveReportContactSettings: (payload: Record<string, unknown>) =>
+    request<ReportContactSettings>("/api/admin/system-settings/report-contact", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
   gatewayConfig: () => request<GatewayConfig>("/api/admin/api-gateway"),
   saveSearchConfig: (payload: Record<string, unknown>) =>
     request<GatewayConfig>("/api/admin/api-gateway/search", {

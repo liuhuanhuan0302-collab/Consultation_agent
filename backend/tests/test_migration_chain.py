@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "8279863b17cb"
+HEAD_REVISION = "3e7d1b9c5a20"
 
 
 def _environment(database_path: Path) -> dict[str, str]:

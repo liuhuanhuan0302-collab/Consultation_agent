@@ -1,16 +1,45 @@
 /** 后台管理 — 登录态、统计看板、线索、题库、案例、账号与渠道。 */
 
 import { computed, reactive, ref, watch, type Component } from "vue";
-import { BookOpen, BriefcaseBusiness, FileText, KeyRound, LayoutDashboard, QrCode, Users } from "lucide-vue-next";
+import { BookOpen, BriefcaseBusiness, FileText, KeyRound, LayoutDashboard, QrCode, Settings, Users } from "lucide-vue-next";
 
 import { ApiError, api, type LeadQueryParams } from "../api";
-import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, CompanyResearchValue, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, User } from "../types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, CompanyResearchValue, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, ReportContactSettings, User } from "../types";
 import { isValidEmail } from "../utils/format";
 import { normalizeReportHtml } from "../utils/reportHtml";
 import { clearToasts, pushToast } from "./feedback";
 
-export type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels" | "gateway";
+export type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels" | "gateway" | "settings";
 type LeadSortOrder = "newest" | "oldest";
+export type LeadPaginationItem = number | "ellipsis-left" | "ellipsis-right";
+
+const LEAD_PAGE_SIZE_MIN = 6;
+const LEAD_PAGE_SIZE_MAX = 20;
+const LEAD_TABLE_ROW_HEIGHT = 46;
+const LEAD_PAGE_RESERVED_HEIGHT = 360;
+
+/** 根据视口高度估算线索表格能完整容纳的行数。 */
+export function adaptiveLeadPageSize(viewportHeight: number): number {
+  if (!Number.isFinite(viewportHeight)) return 10;
+  const availableHeight = Math.max(0, viewportHeight - LEAD_PAGE_RESERVED_HEIGHT);
+  return Math.min(
+    LEAD_PAGE_SIZE_MAX,
+    Math.max(LEAD_PAGE_SIZE_MIN, Math.floor(availableHeight / LEAD_TABLE_ROW_HEIGHT)),
+  );
+}
+
+/** 生成稳定的页码窗口；首尾页始终可达，中间按需显示省略号。 */
+export function leadPaginationItems(currentPage: number, totalPages: number): LeadPaginationItem[] {
+  if (totalPages <= 0) return [];
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+
+  const current = Math.min(totalPages, Math.max(1, currentPage));
+  if (current <= 4) return [1, 2, 3, 4, 5, "ellipsis-right", totalPages];
+  if (current >= totalPages - 3) {
+    return [1, "ellipsis-left", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+  return [1, "ellipsis-left", current - 1, current, current + 1, "ellipsis-right", totalPages];
+}
 
 type CompanyResearchSectionKey =
   | "company_overview"
@@ -66,13 +95,23 @@ export function useAdmin() {
   const leadIndustrySource = ref<Lead[]>([]); // 未筛选全量列表，仅用于构建行业下拉选项
   const leadPageSize = ref(10);
   const leadPage = ref(1);
+  const leadAdvancedFilterOpen = ref(false);
+  const leadAdvancedFilterDraft = reactive({
+    industry: "全部行业",
+    leadLevel: "",
+    viewStatus: "",
+    exportStatus: "",
+  });
   const leadRuleDialogOpen = ref(false);
   const leadDetailOpen = ref(false);
   const leadDetailLoading = ref(false);
   const selectedLeadDetail = ref<LeadDetail | null>(null);
   const researchRunning = ref(false);
   const resumeDeliveryRunning = ref(false);
+  const attachmentDeliveryRunning = ref(false);
+  const reportRegenerationRunning = ref(false);
   let researchPollTimer: number | null = null;
+  let reportRegenerationPollTimer: number | null = null;
   const diagnosticEmailDraft = ref("");
   const diagnosticEmailUpdating = ref(false);
   const adminQuestions = ref<QuestionModule[]>([]);
@@ -88,6 +127,8 @@ export function useAdmin() {
   const batchDownloading = ref<number | null>(null);
   const leadWordExporting = ref(false);
   const gatewayConfig = ref<GatewayConfig | null>(null);
+  const reportContactSettings = ref<ReportContactSettings | null>(null);
+  const reportContactSaving = ref(false);
   const searchSaving = ref(false);
   const searchTesting = ref(false);
   const llmSaving = ref(false);
@@ -104,6 +145,12 @@ export function useAdmin() {
     llm_api_key: "",
     llm_base_url: "",
     llm_model: ""
+  });
+  const reportContactForm = reactive({
+    contact_name: "",
+    phone: "",
+    wechat: "",
+    email: ""
   });
 
   const caseForm = reactive({
@@ -125,15 +172,17 @@ export function useAdmin() {
 
   const channelForm = reactive({ code: "", name: "", description: "" });
 
-  const adminTabs: { key: AdminTab; label: string; icon: Component }[] = [
+  const baseAdminTabs: { key: AdminTab; label: string; icon: Component; adminOnly?: boolean }[] = [
     { key: "overview", label: "统计", icon: LayoutDashboard },
     { key: "leads", label: "线索", icon: BriefcaseBusiness },
     { key: "questions", label: "题库", icon: BookOpen },
     { key: "cases", label: "案例", icon: FileText },
     { key: "users", label: "账号", icon: Users },
     { key: "channels", label: "渠道", icon: QrCode },
-    { key: "gateway", label: "API 配置", icon: KeyRound }
+    { key: "gateway", label: "API 配置", icon: KeyRound },
+    { key: "settings", label: "系统设置", icon: Settings, adminOnly: true }
   ];
+  const adminTabs = computed(() => baseAdminTabs.filter((tab) => !tab.adminOnly || adminUser.value?.role === "admin"));
 
   function clearAdminSession(message = "") {
     adminToken.value = false;
@@ -179,6 +228,9 @@ export function useAdmin() {
   }
 
   async function loadAdminTab(tab: AdminTab) {
+    if (tab === "settings" && adminUser.value?.role !== "admin") {
+      tab = "overview";
+    }
     // 页面切换时清理旧提示；同页签内部刷新（如删除线索后重载）保留刚产生的提示。
     const tabChanged = adminTab.value !== tab;
     if (tabChanged) clearToasts();
@@ -202,6 +254,7 @@ export function useAdmin() {
       if (tab === "users") users.value = await api.users().catch(() => []);
       if (tab === "channels") channels.value = await api.channels().catch(() => []);
       if (tab === "gateway") await loadGatewayTab();
+      if (tab === "settings" && adminUser.value?.role === "admin") await loadReportContactSettings();
     } catch (err) {
       if (!handleAdminRequestError(err)) {
         pushToast("error", err instanceof Error ? err.message : "加载后台数据失败");
@@ -239,8 +292,55 @@ export function useAdmin() {
     leadPage.value = 1;
   }
 
-  function goLeadPage(direction: number) {
-    leadPage.value = Math.min(leadTotalPages.value, Math.max(1, leadPage.value + direction));
+  function goLeadPage(targetPage: number) {
+    const maximumPage = Math.max(1, leadTotalPages.value);
+    leadPage.value = Math.min(maximumPage, Math.max(1, targetPage));
+  }
+
+  function syncLeadPageSize(viewportHeight: number) {
+    const nextSize = adaptiveLeadPageSize(viewportHeight);
+    if (nextSize === leadPageSize.value) return;
+
+    const firstVisibleIndex = (Math.max(1, leadPage.value) - 1) * leadPageSize.value;
+    leadPageSize.value = nextSize;
+    const maximumPage = Math.max(1, Math.ceil(filteredLeads.value.length / nextSize));
+    leadPage.value = Math.min(maximumPage, Math.floor(firstVisibleIndex / nextSize) + 1);
+  }
+
+  function copyAdvancedFiltersToDraft() {
+    leadAdvancedFilterDraft.industry = leadIndustryFilter.value;
+    leadAdvancedFilterDraft.leadLevel = leadLevelFilter.value;
+    leadAdvancedFilterDraft.viewStatus = leadViewFilter.value;
+    leadAdvancedFilterDraft.exportStatus = leadExportFilter.value;
+  }
+
+  function openLeadAdvancedFilters() {
+    copyAdvancedFiltersToDraft();
+    leadAdvancedFilterOpen.value = true;
+  }
+
+  function closeLeadAdvancedFilters() {
+    leadAdvancedFilterOpen.value = false;
+  }
+
+  function applyLeadAdvancedFilters() {
+    leadIndustryFilter.value = leadAdvancedFilterDraft.industry;
+    leadLevelFilter.value = leadAdvancedFilterDraft.leadLevel;
+    leadViewFilter.value = leadAdvancedFilterDraft.viewStatus;
+    leadExportFilter.value = leadAdvancedFilterDraft.exportStatus;
+    leadAdvancedFilterOpen.value = false;
+  }
+
+  function resetLeadAdvancedFilters() {
+    leadAdvancedFilterDraft.industry = "全部行业";
+    leadAdvancedFilterDraft.leadLevel = "";
+    leadAdvancedFilterDraft.viewStatus = "";
+    leadAdvancedFilterDraft.exportStatus = "";
+    leadIndustryFilter.value = "全部行业";
+    leadLevelFilter.value = "";
+    leadViewFilter.value = "";
+    leadExportFilter.value = "";
+    leadAdvancedFilterOpen.value = false;
   }
 
   async function openLeadDetail(lead: Lead) {
@@ -269,7 +369,9 @@ export function useAdmin() {
     selectedLeadDetail.value = null;
     diagnosticEmailDraft.value = "";
     clearResearchPolling();
+    clearReportRegenerationPolling();
     researchRunning.value = false;
+    reportRegenerationRunning.value = false;
     clearToasts();
   }
 
@@ -629,6 +731,93 @@ export function useAdmin() {
     hydrateGatewayForm();
   }
 
+  async function retryReportAttachmentDelivery() {
+    const detail = selectedLeadDetail.value;
+    if (!detail || attachmentDeliveryRunning.value) return;
+    attachmentDeliveryRunning.value = true;
+    try {
+      const result = await api.retryReportAttachmentDelivery(detail.lead.id);
+      pushToast("success", result.message || "已重新生成附件并发送");
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "重新生成附件并发送失败");
+    } finally {
+      attachmentDeliveryRunning.value = false;
+    }
+  }
+
+  function clearReportRegenerationPolling() {
+    if (reportRegenerationPollTimer !== null) {
+      window.clearInterval(reportRegenerationPollTimer);
+      reportRegenerationPollTimer = null;
+    }
+  }
+
+  async function regenerateLeadReport() {
+    const detail = selectedLeadDetail.value;
+    if (!detail?.report || reportRegenerationRunning.value) return;
+    if (!window.confirm("确定重新生成 AI 报告吗？\n新报告校验成功后会替换当前内容，但不会生成 PDF，也不会发送邮件。")) return;
+
+    reportRegenerationRunning.value = true;
+    clearReportRegenerationPolling();
+    try {
+      const result = await api.regenerateLeadReport(detail.lead.id);
+      pushToast("success", result.message);
+      selectedLeadDetail.value = await api.leadDetail(detail.lead.id);
+      let attempts = 0;
+      reportRegenerationPollTimer = window.setInterval(async () => {
+        attempts += 1;
+        try {
+          const refreshed = await api.leadDetail(detail.lead.id);
+          selectedLeadDetail.value = refreshed;
+          if (refreshed.report?.status !== "generating" || attempts >= 120) {
+            clearReportRegenerationPolling();
+            reportRegenerationRunning.value = false;
+            if (refreshed.report?.status === "generated" && !refreshed.report.generation_error) {
+              pushToast("success", "AI 报告已重新生成；未生成 PDF，也未发送邮件");
+            } else if (refreshed.report?.generation_error) {
+              pushToast("error", refreshed.report.generation_error);
+            } else if (attempts >= 120) {
+              pushToast("error", "重新生成仍在处理中，请稍后刷新客户详情查看结果");
+            }
+          }
+        } catch (err) {
+          clearReportRegenerationPolling();
+          reportRegenerationRunning.value = false;
+          pushToast("error", err instanceof Error ? err.message : "刷新 AI 报告状态失败");
+        }
+      }, 3000);
+    } catch (err) {
+      reportRegenerationRunning.value = false;
+      pushToast("error", err instanceof Error ? err.message : "重新生成 AI 报告失败");
+    }
+  }
+
+  async function loadReportContactSettings() {
+    reportContactSettings.value = await api.reportContactSettings();
+    reportContactForm.contact_name = reportContactSettings.value.contact_name;
+    reportContactForm.phone = reportContactSettings.value.phone;
+    reportContactForm.wechat = reportContactSettings.value.wechat;
+    reportContactForm.email = reportContactSettings.value.email;
+  }
+
+  async function saveReportContactSettings() {
+    reportContactSaving.value = true;
+    try {
+      reportContactSettings.value = await api.saveReportContactSettings({ ...reportContactForm });
+      reportContactForm.contact_name = reportContactSettings.value.contact_name;
+      reportContactForm.phone = reportContactSettings.value.phone;
+      reportContactForm.wechat = reportContactSettings.value.wechat;
+      reportContactForm.email = reportContactSettings.value.email;
+      pushToast("success", "报告联系信息已保存");
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "保存报告联系信息失败");
+    } finally {
+      reportContactSaving.value = false;
+    }
+  }
+
   function hydrateGatewayForm() {
     const config = gatewayConfig.value;
     if (!config) return;
@@ -798,14 +987,29 @@ export function useAdmin() {
 
   // 筛选与排序均由服务端完成，前端只负责分页切片
   const filteredLeads = computed(() => leads.value);
-  const leadTotalPages = computed(() => Math.max(1, Math.ceil(filteredLeads.value.length / leadPageSize.value)));
+  const leadTotalPages = computed(() => Math.ceil(filteredLeads.value.length / leadPageSize.value));
   const pagedLeads = computed(() => {
-    const safePage = Math.min(leadPage.value, leadTotalPages.value);
+    const safePage = Math.min(leadPage.value, Math.max(1, leadTotalPages.value));
     const start = (safePage - 1) * leadPageSize.value;
     return filteredLeads.value.slice(start, start + leadPageSize.value);
   });
-  const leadPageStart = computed(() => filteredLeads.value.length ? (Math.min(leadPage.value, leadTotalPages.value) - 1) * leadPageSize.value + 1 : 0);
+  const leadPageStart = computed(() => filteredLeads.value.length ? (Math.min(leadPage.value, Math.max(1, leadTotalPages.value)) - 1) * leadPageSize.value + 1 : 0);
   const leadPageEnd = computed(() => Math.min(leadPageStart.value + leadPageSize.value - 1, filteredLeads.value.length));
+  const leadPaginationPages = computed(() => leadPaginationItems(leadPage.value, leadTotalPages.value));
+  const leadAdvancedFilterCount = computed(() => [
+    leadIndustryFilter.value !== "全部行业",
+    Boolean(leadLevelFilter.value),
+    Boolean(leadViewFilter.value),
+    Boolean(leadExportFilter.value),
+  ].filter(Boolean).length);
+  const leadAdvancedFilterSummary = computed(() => {
+    const summary: string[] = [];
+    if (leadIndustryFilter.value !== "全部行业") summary.push(`行业：${leadIndustryFilter.value}`);
+    if (leadLevelFilter.value) summary.push(`等级：${leadLevelFilter.value === "high" ? "高意向" : leadLevelFilter.value === "medium" ? "中意向" : "低意向"}`);
+    if (leadViewFilter.value) summary.push(`查看：${leadViewFilter.value === "viewed" ? "已经查看" : "尚未查看"}`);
+    if (leadExportFilter.value) summary.push(`导出：${leadExportFilter.value === "exported" ? "已导出" : "未导出"}`);
+    return summary;
+  });
 
   const leadDetailReportHtml = computed(() => normalizeReportHtml(selectedLeadDetail.value?.report?.html_content || ""));
   const selectedLeadScoreRate = computed(() => {
@@ -821,11 +1025,10 @@ export function useAdmin() {
     }
   );
 
-  watch(leadPageSize, resetLeadPage);
-
   watch(leadTotalPages, (totalPages) => {
-    if (leadPage.value > totalPages) {
-      leadPage.value = totalPages;
+    const maximumPage = Math.max(1, totalPages);
+    if (leadPage.value > maximumPage) {
+      leadPage.value = maximumPage;
     }
   });
 
@@ -848,12 +1051,16 @@ export function useAdmin() {
     leadExportFilter,
     leadPageSize,
     leadPage,
+    leadAdvancedFilterOpen,
+    leadAdvancedFilterDraft,
     leadRuleDialogOpen,
     leadDetailOpen,
     leadDetailLoading,
     selectedLeadDetail,
     researchRunning,
     resumeDeliveryRunning,
+    attachmentDeliveryRunning,
+    reportRegenerationRunning,
     diagnosticEmailDraft,
     diagnosticEmailUpdating,
     adminQuestions,
@@ -874,6 +1081,9 @@ export function useAdmin() {
     questionModuleForm,
     questionForm,
     gatewayConfig,
+    reportContactSettings,
+    reportContactForm,
+    reportContactSaving,
     searchForm,
     llmForm,
     searchSaving,
@@ -893,6 +1103,9 @@ export function useAdmin() {
     pagedLeads,
     leadPageStart,
     leadPageEnd,
+    leadPaginationPages,
+    leadAdvancedFilterCount,
+    leadAdvancedFilterSummary,
     leadDetailReportHtml,
     selectedLeadScoreRate,
     loginAdmin,
@@ -900,11 +1113,18 @@ export function useAdmin() {
     loadAdminTab,
     resetLeadPage,
     goLeadPage,
+    syncLeadPageSize,
+    openLeadAdvancedFilters,
+    closeLeadAdvancedFilters,
+    applyLeadAdvancedFilters,
+    resetLeadAdvancedFilters,
     openLeadDetail,
     openLeadDetailById,
     closeLeadDetail,
     runLeadResearch,
     resumeReportDelivery,
+    retryReportAttachmentDelivery,
+    regenerateLeadReport,
     updateLeadDiagnosticEmail,
     exportLeads,
     exportUnexported,
@@ -927,5 +1147,6 @@ export function useAdmin() {
     saveLlmConfig,
     testSearchConfig,
     testLlmConfig,
+    saveReportContactSettings,
   };
 }

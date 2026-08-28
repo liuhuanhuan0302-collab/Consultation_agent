@@ -40,7 +40,7 @@ nodes:
   I-060:
     title: Independent final regression
     milestone: M4
-    depends_on: [I-040, I-010, I-020, I-030, I-050, I-080]
+    depends_on: [I-040, I-010, I-020, I-030, I-050, I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150]
     status: pending
   I-070:
     title: Replace deprecated UTC timestamp in public lead limit
@@ -51,8 +51,53 @@ nodes:
     title: Reuse internal Word final report for customer PDF delivery
     milestone: M4
     depends_on: [I-050, I-070]
-    status: implementing
-scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-080, I-060]
+    status: accepted
+  I-090:
+    title: Add report advisory wording and global contact settings
+    milestone: M4
+    depends_on: [I-050, I-080]
+    status: accepted
+  I-100:
+    title: Unify and elevate customer report presentation
+    milestone: M4
+    depends_on: [I-080, I-090]
+    status: accepted
+  I-110:
+    title: Implement approved compact editorial cover
+    milestone: M4
+    depends_on: [I-100]
+    status: accepted
+  I-120:
+    title: Produce reference-aligned report body preview
+    milestone: M4
+    depends_on: [I-110]
+    status: accepted
+  I-130:
+    title: Add safe administrator AI-report regeneration
+    milestone: M4
+    depends_on: [I-120]
+    status: accepted
+  I-140:
+    title: Lock the approved customer report across all outputs
+    milestone: M4
+    depends_on: [I-130]
+    status: accepted
+  I-150:
+    title: Improve lead filtering, adaptive pagination and industry coverage
+    milestone: M4
+    depends_on: [I-140]
+    status: accepted
+  I-160:
+    title: Make attachment retry content-preserving for fallback reports
+    milestone: M4
+    depends_on: [I-140]
+    status: accepted
+  I-170:
+    title: Recover crashed AI-report regeneration safely
+    milestone: M4
+    depends_on: [I-130]
+    status: accepted
+scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150, I-160, I-170, I-060]
 optional_nodes:
   I-041:
     title: Read-only historical research audit

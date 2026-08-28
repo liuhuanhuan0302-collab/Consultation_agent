@@ -26,8 +26,16 @@ the real domain layout and call paths.
 
 ## M4 - Customer report delivery and final regression
 
-Issues: I-080, I-060
+Issues: I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150, I-160, I-170, I-060
 Outcome: customer PDF delivery reuses the internal Word final-report layout via
 LibreOffice with a controlled Chromium fallback; independent regression evidence,
-remaining unverified items, and an exact safe commit inventory are available.
+new reports use cautious AI-scene wording plus an immutable administrator-managed
+contact snapshot across web/Word/PDF output; customer Word, fallback PDF, and
+online rendering share a premium executive-consulting visual language; remaining
+the customer cover uses the approved screenshot-controlled native hierarchy;
+the report body uses the reference consulting hierarchy, table, callout and
+page-furniture system without materially changing content; administrators can
+regenerate validated AI report content without implicitly creating a PDF or
+sending email and without losing the prior report on failure; remaining
+unverified items, and an exact safe commit inventory are available.
 No commit or deployment is performed.

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   ArrowLeft,
   ArrowDownToLine,
@@ -8,22 +8,26 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   FileText,
   Lock,
   LogOut,
   Plus,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
-  Trash2
+  Trash2,
+  X
 } from "lucide-vue-next";
-import ReportCharts from "./components/ReportCharts.vue";
+import CustomerReportView from "./components/CustomerReportView.vue";
 import { api } from "./api";
 import { dismissToast, error, toasts } from "./composables/feedback";
 import { useAdmin, companyResearchSections, researchLegacyText, researchSubsections, searchProviderOfficialUrls } from "./composables/useAdmin";
 import { useQuestionnaire } from "./composables/useQuestionnaire";
 import { useReportView } from "./composables/useReportView";
 import { isAdmin, reportToken } from "./utils/appPaths";
-import { bucketPct, completionRate, formatDate, formatDateTime, pct } from "./utils/format";
+import { bucketPct, completionRate, formatDateTime, pct } from "./utils/format";
 
 const {
   step,
@@ -111,6 +115,37 @@ function processStatusTone(status: string | null | undefined) {
   return "pending";
 }
 
+function reportCompanyName(title: string) {
+  const company = title.replace(/\s*AI\s*原生转型诊断报告\s*$/, "").trim();
+  return company || "企业";
+}
+
+function reportShortCompanyName(title: string) {
+  const company = reportCompanyName(title);
+  return company.replace(/(?:集团股份有限公司|集团有限责任公司|股份有限公司|有限责任公司|集团有限公司|有限公司)$/, "").trim() || company;
+}
+
+function reportTitleLengthClass(title: string) {
+  const length = Array.from(reportShortCompanyName(title).replace(/\s+/g, "")).length;
+  if (length > 16) return "hero-title--extra-long";
+  if (length > 10) return "hero-title--long";
+  return "";
+}
+
+function reportChineseDate(value: string | null | undefined) {
+  if (!value) return "未记录";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未记录";
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    timeZone: "Asia/Shanghai",
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")} 年 ${part("month")} 月 ${part("day")} 日`;
+}
+
 /** 线索三维跟踪状态的中文映射。 */
 const viewStatusLabels: Record<string, string> = {
   unviewed: "尚未查看",
@@ -173,21 +208,20 @@ const {
   analytics,
   leads,
   leadSortOrder,
-  leadIndustryFilter,
   leadCreatedFrom,
   leadCreatedTo,
-  leadLevelFilter,
-  leadViewFilter,
   leadProcessingFilter,
-  leadExportFilter,
-  leadPageSize,
   leadPage,
+  leadAdvancedFilterOpen,
+  leadAdvancedFilterDraft,
   leadRuleDialogOpen,
   leadDetailOpen,
   leadDetailLoading,
   selectedLeadDetail,
   researchRunning,
   resumeDeliveryRunning,
+  attachmentDeliveryRunning,
+  reportRegenerationRunning,
   diagnosticEmailDraft,
   diagnosticEmailUpdating,
   adminQuestions,
@@ -208,6 +242,9 @@ const {
   questionModuleForm,
   questionForm,
   gatewayConfig,
+  reportContactSettings,
+  reportContactForm,
+  reportContactSaving,
   searchForm,
   llmForm,
   searchSaving,
@@ -227,17 +264,27 @@ const {
   pagedLeads,
   leadPageStart,
   leadPageEnd,
+  leadPaginationPages,
+  leadAdvancedFilterCount,
+  leadAdvancedFilterSummary,
   leadDetailReportHtml,
   selectedLeadScoreRate,
   loginAdmin,
   loadAdminShell,
   loadAdminTab,
   goLeadPage,
+  syncLeadPageSize,
+  openLeadAdvancedFilters,
+  closeLeadAdvancedFilters,
+  applyLeadAdvancedFilters,
+  resetLeadAdvancedFilters,
   openLeadDetail,
   openLeadDetailById,
   closeLeadDetail,
   runLeadResearch,
   resumeReportDelivery,
+  retryReportAttachmentDelivery,
+  regenerateLeadReport,
   updateLeadDiagnosticEmail,
   exportLeads,
   exportUnexported,
@@ -260,10 +307,80 @@ const {
   saveLlmConfig,
   testSearchConfig,
   testLlmConfig,
+  saveReportContactSettings,
 } = useAdmin();
+
+const leadAdvancedFilterTrigger = ref<HTMLButtonElement | null>(null);
+const leadAdvancedFilterDialog = ref<HTMLElement | null>(null);
+
+function focusLeadAdvancedFilterDialog() {
+  void nextTick(() => {
+    leadAdvancedFilterDialog.value
+      ?.querySelector<HTMLElement>("select, button, [href], input, [tabindex]:not([tabindex='-1'])")
+      ?.focus();
+  });
+}
+
+function showLeadAdvancedFilters() {
+  openLeadAdvancedFilters();
+  focusLeadAdvancedFilterDialog();
+}
+
+function restoreLeadAdvancedFilterFocus() {
+  void nextTick(() => leadAdvancedFilterTrigger.value?.focus());
+}
+
+function cancelLeadAdvancedFilters() {
+  closeLeadAdvancedFilters();
+  restoreLeadAdvancedFilterFocus();
+}
+
+function submitLeadAdvancedFilters() {
+  applyLeadAdvancedFilters();
+  restoreLeadAdvancedFilterFocus();
+}
+
+function clearLeadAdvancedFilters() {
+  resetLeadAdvancedFilters();
+  restoreLeadAdvancedFilterFocus();
+}
+
+function handleLeadAdvancedFilterKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelLeadAdvancedFilters();
+    return;
+  }
+  if (event.key !== "Tab" || !leadAdvancedFilterDialog.value) return;
+
+  const focusable = Array.from(
+    leadAdvancedFilterDialog.value.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+    ),
+  ).filter((element) => element.offsetParent !== null);
+  if (!focusable.length) return;
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function syncLeadRowsToViewport() {
+  syncLeadPageSize(window.innerHeight);
+}
 
 onMounted(async () => {
   window.addEventListener("beforeunload", handleBeforeUnload);
+  if (isAdmin) {
+    syncLeadRowsToViewport();
+    window.addEventListener("resize", syncLeadRowsToViewport);
+  }
   try {
     if (isAdmin) {
       await loadAdminShell();
@@ -299,6 +416,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   clearReportPolling();
   window.removeEventListener("beforeunload", handleBeforeUnload);
+  window.removeEventListener("resize", syncLeadRowsToViewport);
   if (leadStatusRefreshTimer !== null) window.clearInterval(leadStatusRefreshTimer);
 });
 </script>
@@ -421,7 +539,7 @@ onBeforeUnmount(() => {
             <button v-if="canExportLeads" class="secondary" type="button" @click="toggleExportBatches"><FileText :size="18" /> {{ exportBatchPanelOpen ? "收起导出历史" : "导出历史" }}</button>
           </div>
         </div>
-        <div class="lead-toolbar">
+        <div class="lead-toolbar lead-toolbar-quick">
           <label class="lead-filter-date">
             创建日期
             <span class="date-range">
@@ -429,27 +547,6 @@ onBeforeUnmount(() => {
               <span class="date-sep">至</span>
               <input v-model="leadCreatedTo" type="date" aria-label="创建日期止" />
             </span>
-          </label>
-          <label>
-            行业
-            <select v-model="leadIndustryFilter">
-              <option v-for="item in leadIndustryOptions" :key="item">{{ item }}</option>
-            </select>
-          </label>
-          <label>
-            线索等级
-            <select v-model="leadLevelFilter">
-              <option value="">全部</option>
-              <option v-for="(label, value) in leadLevelLabels" :key="value" :value="value">{{ label }}</option>
-            </select>
-          </label>
-          <label>
-            查看状态
-            <select v-model="leadViewFilter">
-              <option value="">全部</option>
-              <option value="unviewed">尚未查看</option>
-              <option value="viewed">已经查看</option>
-            </select>
           </label>
           <label>
             处理状态
@@ -462,30 +559,29 @@ onBeforeUnmount(() => {
             </select>
           </label>
           <label>
-            导出状态
-            <select v-model="leadExportFilter">
-              <option value="">全部</option>
-              <option value="unexported">未导出</option>
-              <option value="exported">已导出</option>
-            </select>
-          </label>
-          <label>
             时间排序
             <select v-model="leadSortOrder">
               <option value="newest">最新优先</option>
               <option value="oldest">最早优先</option>
             </select>
           </label>
-          <label>
-            每页
-            <select v-model.number="leadPageSize">
-              <option :value="10">10 条</option>
-              <option :value="15">15 条</option>
-              <option :value="30">30 条</option>
-              <option :value="50">50 条</option>
-            </select>
-          </label>
+          <button
+            ref="leadAdvancedFilterTrigger"
+            class="secondary lead-more-filter"
+            type="button"
+            aria-haspopup="dialog"
+            :aria-expanded="leadAdvancedFilterOpen"
+            @click="showLeadAdvancedFilters"
+          >
+            <SlidersHorizontal :size="17" />
+            更多筛选
+            <span v-if="leadAdvancedFilterCount" class="filter-count" aria-label="已启用高级筛选数量">{{ leadAdvancedFilterCount }}</span>
+          </button>
           <div class="lead-count">共 {{ filteredLeads.length }} 条</div>
+          <div v-if="leadAdvancedFilterSummary.length" class="lead-filter-summary" aria-live="polite">
+            <span class="lead-filter-summary-label">已启用：</span>
+            <span v-for="item in leadAdvancedFilterSummary" :key="item" class="filter-chip">{{ item }}</span>
+          </div>
         </div>
         <div class="leads-table-wrap">
           <table class="leads-table">
@@ -518,11 +614,34 @@ onBeforeUnmount(() => {
         </div>
         <footer class="pagination">
           <span>显示 {{ leadPageStart }}-{{ leadPageEnd }} / {{ filteredLeads.length }}</span>
-          <div>
-            <button class="secondary" :disabled="leadPage <= 1" @click="goLeadPage(-1)"><ChevronLeft :size="16" /> 上一页</button>
-            <strong>{{ leadPage }} / {{ leadTotalPages }}</strong>
-            <button class="secondary" :disabled="leadPage >= leadTotalPages" @click="goLeadPage(1)">下一页 <ChevronRight :size="16" /></button>
-          </div>
+          <nav class="pagination-nav" aria-label="线索列表分页">
+            <button class="secondary pagination-edge" type="button" :disabled="leadPage <= 1" aria-label="第一页" title="第一页" @click="goLeadPage(1)">
+              <ChevronsLeft :size="16" /><span class="pagination-label">首页</span>
+            </button>
+            <button class="secondary pagination-edge" type="button" :disabled="leadPage <= 1" aria-label="上一页" @click="goLeadPage(leadPage - 1)">
+              <ChevronLeft :size="16" /><span class="pagination-label">上一页</span>
+            </button>
+            <div class="pagination-pages">
+              <template v-for="item in leadPaginationPages" :key="item">
+                <button
+                  v-if="typeof item === 'number'"
+                  class="pagination-page"
+                  :class="{ active: item === leadPage }"
+                  type="button"
+                  :aria-current="item === leadPage ? 'page' : undefined"
+                  :aria-label="`第 ${item} 页`"
+                  @click="goLeadPage(item)"
+                >{{ item }}</button>
+                <span v-else class="pagination-ellipsis" aria-hidden="true">…</span>
+              </template>
+            </div>
+            <button class="secondary pagination-edge" type="button" :disabled="leadTotalPages === 0 || leadPage >= leadTotalPages" aria-label="下一页" @click="goLeadPage(leadPage + 1)">
+              <span class="pagination-label">下一页</span><ChevronRight :size="16" />
+            </button>
+            <button class="secondary pagination-edge" type="button" :disabled="leadTotalPages === 0 || leadPage >= leadTotalPages" aria-label="最后一页" title="最后一页" @click="goLeadPage(leadTotalPages)">
+              <span class="pagination-label">尾页</span><ChevronsRight :size="16" />
+            </button>
+          </nav>
         </footer>
 
         <section v-if="exportBatchPanelOpen" class="export-batches-panel">
@@ -706,7 +825,7 @@ onBeforeUnmount(() => {
                 {{ researchRunning ? "正在联网检索企业信息…" : selectedLeadDetail.report?.company_research ? "重新检索企业信息" : "手动搜索企业信息" }}
               </button>
               <button
-                v-if="selectedLeadDetail.report?.research_status === 'generated' && (selectedLeadDetail.report?.status === 'failed' || selectedLeadDetail.delivery?.status === 'failed' || !selectedLeadDetail.delivery)"
+                v-if="selectedLeadDetail.report?.research_status === 'generated' && (selectedLeadDetail.report?.status === 'failed' || !selectedLeadDetail.delivery)"
                 class="primary"
                 type="button"
                 :disabled="resumeDeliveryRunning"
@@ -714,12 +833,46 @@ onBeforeUnmount(() => {
               >
                 {{ resumeDeliveryRunning ? "正在重新入队…" : "继续生成报告并发送" }}
               </button>
+              <button
+                v-if="selectedLeadDetail.report?.html_content && ['generated', 'fallback'].includes(selectedLeadDetail.report.status) && selectedLeadDetail.delivery?.status === 'failed'"
+                class="primary"
+                type="button"
+                :disabled="attachmentDeliveryRunning"
+                @click="retryReportAttachmentDelivery"
+              >
+                {{ attachmentDeliveryRunning ? "正在重新生成附件…" : "重新生成附件并发送" }}
+              </button>
             </div>
           </section>
 
           <section class="detail-block">
-            <h3>AI 分析报告</h3>
-            <div v-if="selectedLeadDetail.report?.html_content" class="detail-report-html" v-html="leadDetailReportHtml"></div>
+            <div class="detail-block-heading">
+              <h3>AI 分析报告</h3>
+              <button
+                v-if="adminUser?.role === 'admin' && selectedLeadDetail.report?.html_content"
+                class="secondary compact-button"
+                type="button"
+                :disabled="reportRegenerationRunning || selectedLeadDetail.report?.status === 'generating'"
+                @click="regenerateLeadReport"
+              >
+                <Sparkles :size="16" />
+                {{ reportRegenerationRunning || selectedLeadDetail.report?.status === "generating" ? "正在重新生成…" : "重新生成 AI 报告" }}
+              </button>
+            </div>
+            <CustomerReportView
+              v-if="selectedLeadDetail.report?.html_content"
+              admin-preview
+              :company-name="selectedLeadDetail.lead.company_name || '企业'"
+              :report-id="selectedLeadDetail.report.id"
+              :created-at="selectedLeadDetail.report.created_at"
+              :score="selectedLeadDetail.submission?.total_score != null && selectedLeadDetail.submission?.score_rate != null ? {
+                total: selectedLeadDetail.submission.total_score,
+                max: selectedLeadDetail.submission.max_score,
+                rate: selectedLeadDetail.submission.score_rate,
+              } : null"
+              :dimensions="selectedLeadDetail.submission?.dimensions || []"
+              :html="leadDetailReportHtml"
+            />
             <p v-else class="empty-detail">报告还未生成或暂无内容。</p>
           </section>
         </div>
@@ -806,6 +959,28 @@ onBeforeUnmount(() => {
         </section>
       </div>
 
+      <section v-if="adminTab === 'settings'" class="system-settings-panel">
+        <form class="module-block system-settings-form" @submit.prevent="saveReportContactSettings">
+          <header>
+            <div>
+              <p class="eyebrow">报告联系信息</p>
+              <h2>进一步沟通</h2>
+            </div>
+            <button class="primary" type="submit" :disabled="reportContactSaving">
+              <Check :size="18" /> {{ reportContactSaving ? "保存中..." : "保存设置" }}
+            </button>
+          </header>
+          <p class="gateway-hint">仅影响新生成或重新生成的报告；已生成报告保持原内容。全部留空时，报告不显示“进一步沟通”。</p>
+          <div class="system-settings-grid">
+            <label>联系人<input v-model="reportContactForm.contact_name" maxlength="120" placeholder="例如：优小越" /></label>
+            <label>电话<input v-model="reportContactForm.phone" maxlength="64" placeholder="请输入联系电话" /></label>
+            <label>微信号<input v-model="reportContactForm.wechat" maxlength="120" placeholder="请输入微信号" /></label>
+            <label>邮箱<input v-model="reportContactForm.email" maxlength="254" type="email" placeholder="请输入邮箱" /></label>
+          </div>
+          <small v-if="reportContactSettings?.updated_at" class="settings-updated-at">最近更新：{{ formatDateTime(reportContactSettings.updated_at) }}<span v-if="reportContactSettings.updated_by"> · {{ reportContactSettings.updated_by }}</span></small>
+        </form>
+      </section>
+
       <section v-if="adminTab === 'cases'" class="case-layout">
         <form class="case-form" @submit.prevent="createCase">
           <h2>新增案例</h2>
@@ -876,64 +1051,21 @@ onBeforeUnmount(() => {
 
   <main v-else-if="reportToken" class="report-shell">
     <div v-if="error" class="alert">{{ error }}</div>
-    <section v-if="publicReport" class="report-view">
-      <!-- Hero -->
-      <header class="report-hero">
-        <div class="hero-content">
-          <p class="hero-badge">
-            <Sparkles :size="16" /> AI 原生企业转型诊断报告
-          </p>
-          <h1 class="hero-title">{{ reportTitle }}</h1>
-            <div class="hero-meta">
-              <span>报告编号  {{ publicReport.public_token.slice(0, 8).toUpperCase() }}</span>
-              <span class="meta-divider"></span>
-              <span>{{ formatDate(publicReport.created_at) }}</span>
-            </div>
-            <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
-              {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
-            </button>
-        </div>
-      </header>
-
-      <!-- Score Cards -->
-      <div v-if="reportScore" class="score-strip">
-        <div class="score-card score-card--total">
-          <span class="score-card-label">诊断总分</span>
-          <strong>{{ reportScore.total }}<em>/{{ reportScore.max }}</em></strong>
-          <div class="score-card-bar"><span :style="{ width: `${Math.round(reportScore.rate * 100)}%` }"></span></div>
-        </div>
-        <div class="score-card score-card--rate">
-          <span class="score-card-label">综合得分率</span>
-          <strong>{{ Math.round(reportScore.rate * 100) }}<em>%</em></strong>
-          <div class="score-card-ring">
-            <svg viewBox="0 0 36 36"><path class="ring-bg" d="M18 2a16 16 0 1 1 0 32 16 16 0 0 1 0-32"/><path class="ring-fill" :stroke-dasharray="`${Math.round(reportScore.rate * 100)}, 100`" d="M18 2a16 16 0 1 1 0 32 16 16 0 0 1 0-32"/></svg>
-          </div>
-        </div>
-      </div>
-
-      <section v-if="currentProblemAnalysis.length" class="ai-problem-panel">
-        <header>
-          <div><p class="eyebrow">AI Analysis</p><h2>AI 当前问题分析</h2></div>
-          <span>基于本次答题结果</span>
-        </header>
-        <div v-if="aiProblemAnalysis" class="ai-problem-summary ai-problem-ai-text" v-html="aiProblemAnalysisHtml" />
-        <p v-else class="ai-problem-summary">{{ reportDemandSummary || "正在基于本次答题结果生成企业问题分析。" }}</p>
-        <div class="ai-problem-list">
-          <article v-for="(item, index) in currentProblemAnalysis" :key="item.name">
-            <span class="problem-order">0{{ index + 1 }}</span>
-            <div><strong>{{ item.name }}</strong></div>
-            <b>{{ item.scoreRate }}%</b>
-          </article>
-        </div>
-      </section>
-
-      <!-- Charts -->
-      <ReportCharts v-if="chartDimensions.length" :dimensions="chartDimensions" />
-      <div v-else class="loading">图表数据加载中...</div>
-
-      <!-- Report Content -->
-      <article class="report-html" v-html="reportHtml" />
-    </section>
+    <CustomerReportView
+      v-if="publicReport"
+      :company-name="reportCompanyName(reportTitle)"
+      :report-id="publicReport.id"
+      :created-at="publicReport.created_at"
+      :score="reportScore"
+      :dimensions="chartDimensions"
+      :html="reportHtml"
+    >
+      <template #cover-actions>
+          <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
+            {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
+          </button>
+      </template>
+    </CustomerReportView>
     <div v-else class="loading">报告加载中...</div>
   </main>
 
@@ -1075,65 +1207,81 @@ onBeforeUnmount(() => {
         <button class="secondary" type="button" @click="restartFlow">重新填写</button>
       </section>
 
-      <section v-if="step === 'report' && activeReport" class="report-view">
-        <!-- Hero -->
-        <header class="report-hero">
-          <div class="hero-content">
-            <p class="hero-badge">
-              <Sparkles :size="16" /> AI 原生企业转型诊断报告
-            </p>
-            <h1 class="hero-title">{{ reportTitle }}</h1>
-            <div class="hero-meta">
-              <span>报告编号  {{ pdfToken.slice(0, 8).toUpperCase() }}</span>
-              <span class="meta-divider"></span>
-              <span>{{ formatDate(reportDate) }}</span>
-            </div>
+      <CustomerReportView
+        v-if="step === 'report' && activeReport"
+        :company-name="reportCompanyName(reportTitle)"
+        :report-id="activeReport.id"
+        :created-at="reportDate"
+        :score="reportScore"
+        :dimensions="chartDimensions"
+        :html="reportHtml"
+      >
+        <template #cover-actions>
             <button v-if="isLocalReportTesting" class="secondary report-regenerate" type="button" :disabled="regeneratingReport" @click="regenerateTestReport">
               {{ regeneratingReport ? "重新生成中..." : "重新生成测试报告" }}
             </button>
-          </div>
-        </header>
-
-        <!-- Score Cards -->
-        <div v-if="reportScore" class="score-strip">
-          <div class="score-card score-card--total">
-            <span class="score-card-label">诊断总分</span>
-            <strong>{{ reportScore.total }}<em>/{{ reportScore.max }}</em></strong>
-            <div class="score-card-bar"><span :style="{ width: `${Math.round(reportScore.rate * 100)}%` }"></span></div>
-          </div>
-          <div class="score-card score-card--rate">
-            <span class="score-card-label">综合得分率</span>
-            <strong>{{ Math.round(reportScore.rate * 100) }}<em>%</em></strong>
-            <div class="score-card-ring">
-              <svg viewBox="0 0 36 36"><path class="ring-bg" d="M18 2a16 16 0 1 1 0 32 16 16 0 0 1 0-32"/><path class="ring-fill" :stroke-dasharray="`${Math.round(reportScore.rate * 100)}, 100`" d="M18 2a16 16 0 1 1 0 32 16 16 0 0 1 0-32"/></svg>
-            </div>
-          </div>
-        </div>
-
-        <section v-if="currentProblemAnalysis.length" class="ai-problem-panel">
-          <header>
-            <div><p class="eyebrow">AI Analysis</p><h2>AI 当前问题分析</h2></div>
-            <span>基于本次答题结果</span>
-          </header>
-          <div v-if="aiProblemAnalysis" class="ai-problem-summary ai-problem-ai-text" v-html="aiProblemAnalysisHtml" />
-          <p v-else class="ai-problem-summary">{{ reportDemandSummary || "正在基于本次答题结果生成企业问题分析。" }}</p>
-          <div class="ai-problem-list">
-            <article v-for="(item, index) in currentProblemAnalysis" :key="item.name">
-              <span class="problem-order">0{{ index + 1 }}</span>
-              <div><strong>{{ item.name }}</strong></div>
-              <b>{{ item.scoreRate }}%</b>
-            </article>
-          </div>
-        </section>
-
-        <!-- Charts -->
-        <ReportCharts :dimensions="chartDimensions" />
-
-        <!-- Report Content -->
-        <article class="report-html" v-html="reportHtml" />
-      </section>
+        </template>
+      </CustomerReportView>
     </section>
   </main>
+
+  <div v-if="leadAdvancedFilterOpen" class="modal-backdrop" @click.self="cancelLeadAdvancedFilters">
+    <form
+      ref="leadAdvancedFilterDialog"
+      class="lead-filter-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="lead-filter-dialog-title"
+      aria-describedby="lead-filter-dialog-description"
+      @submit.prevent="submitLeadAdvancedFilters"
+      @keydown="handleLeadAdvancedFilterKeydown"
+    >
+      <header>
+        <div>
+          <p class="eyebrow">线索列表</p>
+          <h2 id="lead-filter-dialog-title">更多筛选</h2>
+        </div>
+        <button class="icon-button" type="button" aria-label="关闭更多筛选" @click="cancelLeadAdvancedFilters"><X :size="18" /></button>
+      </header>
+      <p id="lead-filter-dialog-description" class="lead-filter-dialog-description">选择需要的条件后点击“应用筛选”，列表与筛选结果导出将使用同一组条件。</p>
+      <div class="lead-filter-dialog-grid">
+        <label>
+          行业
+          <select v-model="leadAdvancedFilterDraft.industry">
+            <option v-for="item in leadIndustryOptions" :key="item">{{ item }}</option>
+          </select>
+        </label>
+        <label>
+          线索等级
+          <select v-model="leadAdvancedFilterDraft.leadLevel">
+            <option value="">全部</option>
+            <option v-for="(label, value) in leadLevelLabels" :key="value" :value="value">{{ label }}</option>
+          </select>
+        </label>
+        <label>
+          查看状态
+          <select v-model="leadAdvancedFilterDraft.viewStatus">
+            <option value="">全部</option>
+            <option value="unviewed">尚未查看</option>
+            <option value="viewed">已经查看</option>
+          </select>
+        </label>
+        <label>
+          导出状态
+          <select v-model="leadAdvancedFilterDraft.exportStatus">
+            <option value="">全部</option>
+            <option value="unexported">未导出</option>
+            <option value="exported">已导出</option>
+          </select>
+        </label>
+      </div>
+      <footer class="lead-filter-dialog-actions">
+        <button class="secondary" type="button" @click="cancelLeadAdvancedFilters">取消</button>
+        <button class="secondary" type="button" @click="clearLeadAdvancedFilters">重置筛选</button>
+        <button class="primary" type="submit">应用筛选</button>
+      </footer>
+    </form>
+  </div>
 
   <div v-if="leadRuleDialogOpen" class="modal-backdrop" @click.self="leadRuleDialogOpen = false">
     <section class="rule-dialog" role="dialog" aria-modal="true" aria-labelledby="lead-rule-title">

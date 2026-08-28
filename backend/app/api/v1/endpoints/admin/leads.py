@@ -281,3 +281,53 @@ async def resume_lead_report_delivery(
     if result.should_process_queue:
         background_tasks.add_task(process_next_report_delivery)
     return MessageResponse(message=result.message)
+
+
+@router.post("/api/admin/leads/{lead_id}/retry-attachment-delivery", response_model=MessageResponse)
+async def retry_lead_report_attachment_delivery(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(AdminOnly),
+) -> MessageResponse:
+    """Retry only customer DOCX -> PDF -> email after manual repair."""
+
+    try:
+        result = lead_service.retry_report_attachment_delivery(db, user, lead_id)
+    except (lead_service.LeadNotFoundError, lead_service.LeadReportNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    except lead_service.LeadConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except lead_service.LeadValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+    if result.should_process_queue:
+        background_tasks.add_task(process_next_report_delivery)
+    return MessageResponse(message=result.message)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 3.6.7 仅重新生成 AI 报告内容
+# ══════════════════════════════════════════════════════════════════
+@router.post("/api/admin/leads/{lead_id}/regenerate-report")
+def regenerate_lead_ai_report(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(AdminOnly),
+) -> dict:
+    try:
+        result = lead_service.trigger_report_regeneration(db, user, lead_id)
+    except (lead_service.LeadNotFoundError, lead_service.LeadReportNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    except lead_service.LeadConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except lead_service.LeadValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+    background_tasks.add_task(
+        lead_service.run_report_regeneration_task,
+        result.report_id,
+        result.user_id,
+        result.previous_status,
+        result.generation_started_at,
+    )
+    return {"status": result.status, "message": result.message}

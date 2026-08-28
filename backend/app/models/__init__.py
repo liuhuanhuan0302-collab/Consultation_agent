@@ -25,6 +25,7 @@ from app.models.report import (
     ReportStatus,
     ReportTemplate,
 )
+from app.models.system_setting import ReportContactSetting
 from app.models.user import Role, User
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "ReportFileStatus",
     "ReportStatus",
     "ReportTemplate",
+    "ReportContactSetting",
     "Role",
     "SubmissionStatus",
     "TrackingEvent",
