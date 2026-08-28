@@ -56,6 +56,13 @@ def _report() -> SimpleNamespace:
         "researched_at": "2026-08-22T14:00:00",
     }
     summary = {
+        "report_format_version": 2,
+        "report_contact": {
+            "contact_name": "优小越",
+            "phone": "17646848610",
+            "wechat": "18664874363",
+            "email": "youxiaoyue@youkunai.cn",
+        },
         "score": {"total": 120, "max_score": 240, "score_rate": 0.5},
         "dimensions": [
             {"module_code": "M01", "module_name": "以用户/客户为中心", "score_rate": 0.25},
@@ -73,7 +80,8 @@ def _report() -> SimpleNamespace:
         <tbody><tr><td>1</td><td><strong>流程需要优化</strong></td><td>Q1 得分较低</td></tr></tbody></table>
       </section>
       <section>
-        <h2>二、能力成熟度分析</h2><p>按模块逐项分析。</p>
+        <h2>二、能力成熟度分析</h2><p class="report-section-note">以下按模块逐项分析（含该模块题目得分明细），与上方雷达图、得分排行一一对应。</p>
+        <div class="report-module-head">M01 以用户/客户为中心 · 得分率 25%</div>
         <table class="report-finding-table report-cad-table">
           <thead><tr><th>核心结论</th><th>数据依据</th><th>分析解读</th></tr></thead>
           <tbody>
@@ -82,6 +90,15 @@ def _report() -> SimpleNamespace:
           </tbody>
         </table>
       </section>
+      <section><h2>三、关键矛盾与核心诊断</h2>
+        <table class="report-finding-table report-contradiction-table"><thead><tr><th>关键矛盾</th><th>证据</th><th>诊断</th></tr></thead>
+        <tbody><tr><td>局部清晰与整体协同</td><td>M01 与 M04 得分差异明显。</td><td>需要统一跨部门机制。</td></tr></tbody></table>
+      </section>
+      <section><h2>四、工作坊议题地图</h2><p>围绕关键机制形成共识。</p></section>
+      <section><h2>五、优先 AI 场景建议</h2><p class="report-section-note">旧场景说明。</p>
+        <section class="report-case"><h4>智能排产</h4><p>结合订单预测优化排产。</p><p><strong>预期收益：</strong>提升交付效率。</p></section>
+      </section>
+      <section class="report-contact-section"><h2>进一步沟通</h2><p>旧联系信息。</p></section>
       <section><h2>六、管理层行动建议</h2><ol><li>建立数据治理机制</li></ol></section>
     </article>
     """
@@ -110,9 +127,14 @@ def test_lead_export_has_three_paginated_parts_and_native_report_tables() -> Non
     assert "暂未检索到可靠公开信息" in text
     assert "8. AI 综合分析" in text
     assert "一、执行摘要" in text
-    assert "六、管理层行动建议" in text
-    assert len(document.tables) == 5
-    summary_table = document.tables[-2]
+    assert "三、关键矛盾与核心诊断" in text
+    assert "四、工作坊议题地图" in text
+    assert "五、优先 AI 场景建议" in text
+    assert "六、管理层行动建议" not in text
+    assert "管理层" not in text
+    assert "如需入企调研或进一步了解，可以联系" in text
+    assert "进一步沟通" not in text
+    summary_table = next(table for table in document.tables if table.cell(0, 0).text == "序号")
     assert summary_table.cell(0, 1).text == "核心发现"
     first_width = int(summary_table.cell(0, 0)._tc.tcPr.tcW.get(qn("w:w")))
     evidence_width = int(summary_table.cell(0, 2)._tc.tcPr.tcW.get(qn("w:w")))
@@ -122,7 +144,7 @@ def test_lead_export_has_three_paginated_parts_and_native_report_tables() -> Non
     assert summary_grid_widths[0] == first_width
     assert summary_grid_widths[2] == evidence_width
     assert len(document.inline_shapes) == 2
-    report_table = document.tables[-1]
+    report_table = next(table for table in document.tables if table.cell(0, 0).text == "核心结论")
     assert report_table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")) == "fixed"
     assert report_table.rows[0]._tr.get_or_add_trPr().find(qn("w:tblHeader")) is not None
     assert report_table.cell(1, 0)._tc is report_table.cell(2, 0)._tc
@@ -174,7 +196,7 @@ def _final_report_layout_signature(document: Document) -> tuple:
         )
     heading_signatures = []
     for paragraph in document.paragraphs:
-        if paragraph.text in {"一、执行摘要", "二、能力成熟度分析", "六、管理层行动建议"}:
+        if paragraph.text in {"一、执行摘要", "二、能力成熟度分析", "五、优先 AI 场景建议"}:
             run = paragraph.runs[0]
             heading_signatures.append(
                 (

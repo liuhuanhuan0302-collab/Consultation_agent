@@ -1,5 +1,8 @@
 """结构化报告渲染测试 — AI 输出的 6 部分 JSON 渲染为 HTML。"""
 
+import json
+
+from app.service.report_content import build_report_presentation_html
 from app.service.reporting import parse_structured_report, render_structured_report_html
 
 
@@ -100,6 +103,38 @@ def test_structured_report_escapes_user_input():
     assert "&lt;script&gt;" in html
 
 
+def test_v2_presentation_is_five_sections_and_derives_layout_without_mutating_body():
+    payload = _payload()
+    payload.update({
+        "report_format_version": 2,
+        "report_contact": {
+            "contact_name": "历史联系人",
+            "phone": "10086",
+            "wechat": "historical-wechat",
+            "email": "historical@example.com",
+        },
+    })
+    stored_html = render_structured_report_html(payload, _report_data())
+    stored_copy = stored_html
+    presentation = build_report_presentation_html(
+        stored_html,
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+    assert stored_html == stored_copy
+    assert "report-module-judgment" not in stored_html
+    assert "report-module-judgment" in presentation
+    assert "用户价值导向正处于能力建设阶段" in presentation
+    assert "以下场景仅供决策参考，具体需入企调研后给出更详细的建议。" in presentation
+    assert "1. 销售线索评分助手" in presentation
+    assert "六、管理层行动建议" not in presentation
+    assert "管理层" not in presentation
+    assert "进一步沟通" not in presentation
+    assert "历史联系人" in presentation
+    assert "historical@example.com" in presentation
+    assert "report-contact-callout" in presentation
+
+
 # ══════════════════════════════════════════════════════════════════
 # call_deepseek：网关 Key 失效时不得把 .env DeepSeek Key 发往自定义地址
 # ══════════════════════════════════════════════════════════════════
@@ -183,3 +218,31 @@ def test_call_deepseek_uses_gateway_key_with_custom_base(monkeypatch):
     url, headers = _FakeHttpClient.requests[0]
     assert url == "https://third-party-llm.example/v1/chat/completions"
     assert headers["Authorization"] == "Bearer sk-gateway"
+
+
+def test_generate_report_candidate_validates_before_mutating_report(monkeypatch):
+    report = SimpleNamespace(
+        submission=SimpleNamespace(lead=SimpleNamespace(), dimension_scores=[]),
+        company_research_json='{"evidence_version": 1}',
+        html_content="old html",
+        summary_json='{"old": true}',
+        status="generated",
+    )
+    monkeypatch.setattr(reporting, "select_recommendations", lambda *_args: [])
+    monkeypatch.setattr(reporting, "build_report_payload", lambda *_args, **_kwargs: {
+        "report_format_version": 2,
+        "dimensions": [],
+    })
+    monkeypatch.setattr(reporting, "report_contact_snapshot", lambda _db: {})
+    monkeypatch.setattr(reporting, "effective_llm_override", lambda _db: None)
+
+    async def invalid_model(*_args, **_kwargs):
+        return '{"executive_summary": []}'
+
+    monkeypatch.setattr(reporting, "call_deepseek", invalid_model)
+    with pytest.raises(reporting.ReportContentInvalidError):
+        asyncio.run(reporting.generate_report_candidate(object(), report))
+
+    assert report.html_content == "old html"
+    assert report.summary_json == '{"old": true}'
+    assert report.status == "generated"

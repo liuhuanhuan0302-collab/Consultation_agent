@@ -1,11 +1,12 @@
 """Admin lead-management queries and audit persistence."""
 
 import json
+from datetime import datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.audit import ExportLog
+from app.models.audit import ExportLog, OperationLog
 from app.models.export_batch import ExportBatch
 from app.models.lead import CompanyLead
 from app.models.report import AiConversationMessage, Report, ReportDeliveryJob, ReportDeliveryStatus
@@ -32,6 +33,35 @@ def latest_delivery_for_report(db: Session, report_id: int) -> ReportDeliveryJob
         .order_by(ReportDeliveryJob.created_at.desc())
         .first()
     )
+
+
+def latest_report_regeneration_audit(
+    db: Session,
+    *,
+    lead_id: int,
+    report_id: int,
+) -> tuple[dict, datetime] | None:
+    """Return the latest matching regeneration reservation and its audit time."""
+
+    logs = (
+        db.query(OperationLog)
+        .filter(
+            OperationLog.action == "trigger_report_regeneration",
+            OperationLog.target_type == "lead",
+            OperationLog.target_id == str(lead_id),
+        )
+        .order_by(OperationLog.id.desc())
+        .all()
+    )
+    for log in logs:
+        try:
+            detail = json.loads(log.detail_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(detail, dict) or detail.get("report_id") != report_id:
+            continue
+        return detail, log.created_at
+    return None
 
 
 def latest_sent_delivery_for_report(db: Session, report_id: int) -> ReportDeliveryJob | None:

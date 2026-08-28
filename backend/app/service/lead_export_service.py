@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Iterable
 
 from docx import Document
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+from docx.enum.section import WD_SECTION
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -24,18 +25,41 @@ from app.models.lead import CompanyLead
 from app.models.questionnaire import DiagnosisSubmission
 from app.models.report import Report
 from app.service.company_research import research_section_text, research_subsections
-from app.service.report_content import sanitize_report_content
+from app.service.report_content import build_report_presentation_html
 from app.utils.time_utils import to_china_time, utc_now
 
 
 FONT_NAME = "Microsoft YaHei"
 NAVY = "17365D"
-PALE_GRAY = "F5F7FA"
-BODY_COLOR = RGBColor(31, 44, 61)
-MUTED_COLOR = RGBColor(92, 108, 132)
+RED = "C00000"
+DARK_RED = "A23A35"
+BLUE = "2F5597"
+PALE_RED = "FBE9E9"
+PALE_GRAY = "F1F4F8"
+RULE_GRAY = "D9E2F3"
+PROGRESS_BLUE = "9CB7D6"
+PROGRESS_GRAY = "E7ECF2"
+BODY_COLOR = RGBColor(37, 37, 37)
+MUTED_COLOR = RGBColor(102, 102, 102)
 MISSING_RESEARCH = "暂未检索到可靠公开信息"
 REPORT_CONTENT_WIDTH_CM = 17.4
 SCORE_RATE_ABSOLUTE_TOLERANCE = 0.0001
+DOCUMENT_STYLE_PRESET = "standard_business_brief"
+CUSTOMER_COVER_OVERRIDE = "approved_reference_editorial_cover"
+CUSTOMER_BODY_OVERRIDE = "reference_consulting_body_v2"
+CUSTOMER_COVER_RULE_WIDTH_CM = 16.2
+CUSTOMER_COVER_META_WIDTH_CM = 13.4
+CUSTOMER_COVER_META_LABEL_WIDTH_CM = 3.0
+CUSTOMER_COVER_META_VALUE_WIDTH_CM = 10.4
+CUSTOMER_BODY_TEXT_SIZE_PT = 10.5
+CUSTOMER_BODY_H1_SIZE_PT = 18.0
+CUSTOMER_BODY_LEAD_SIZE_PT = 12.5
+CUSTOMER_BODY_SUBHEAD_SIZE_PT = 11.5
+CUSTOMER_BODY_LINE_SPACING = 1.35
+CUSTOMER_BODY_PARAGRAPH_AFTER_PT = 6.0
+CUSTOMER_BODY_HEADER_SIZE_PT = 7.5
+CUSTOMER_BODY_FOOTER_SIZE_PT = 7.0
+CUSTOMER_BODY_TABLE_SIZE_PT = 9.0
 
 RESEARCH_SECTIONS: tuple[tuple[str, str, bool], ...] = (
     ("company_overview", "公司介绍", True),
@@ -131,7 +155,26 @@ def _set_document_font(document: Document) -> None:
             rpr.insert(0, rfonts)
         for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
             rfonts.set(qn(f"w:{attribute}"), FONT_NAME)
-    document.styles["Normal"].font.size = Pt(10.5)
+    document.styles["Normal"].font.size = Pt(CUSTOMER_BODY_TEXT_SIZE_PT)
+    document.styles["Normal"].paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    document.styles["Normal"].paragraph_format.line_spacing = CUSTOMER_BODY_LINE_SPACING
+    document.styles["Normal"].paragraph_format.space_after = Pt(CUSTOMER_BODY_PARAGRAPH_AFTER_PT)
+    heading_1 = document.styles["Heading 1"]
+    heading_1.font.size = Pt(CUSTOMER_BODY_H1_SIZE_PT)
+    heading_1.font.bold = True
+    heading_1.font.color.rgb = RGBColor.from_string(NAVY)
+    heading_1.paragraph_format.space_before = Pt(17)
+    heading_1.paragraph_format.space_after = Pt(7)
+    heading_1.paragraph_format.line_spacing = 1.0
+    heading_1.paragraph_format.keep_with_next = True
+    heading_2 = document.styles["Heading 2"]
+    heading_2.font.size = Pt(CUSTOMER_BODY_SUBHEAD_SIZE_PT)
+    heading_2.font.bold = True
+    heading_2.font.color.rgb = RGBColor.from_string(BLUE)
+    heading_2.paragraph_format.space_before = Pt(9)
+    heading_2.paragraph_format.space_after = Pt(5)
+    heading_2.paragraph_format.line_spacing = 1.0
+    heading_2.paragraph_format.keep_with_next = True
 
 
 def _text(value: object | None, fallback: str = "未填写") -> str:
@@ -153,6 +196,73 @@ def _shade(cell, color: str) -> None:
         shading = OxmlElement("w:shd")
         properties.append(shading)
     shading.set(qn("w:fill"), color)
+
+
+def _set_paragraph_border(
+    paragraph,
+    *,
+    side: str = "bottom",
+    color: str = RED,
+    size: int = 8,
+    space: int = 5,
+) -> None:
+    properties = paragraph._p.get_or_add_pPr()
+    borders = properties.find(qn("w:pBdr"))
+    if borders is None:
+        borders = OxmlElement("w:pBdr")
+        properties.append(borders)
+    border = borders.find(qn(f"w:{side}"))
+    if border is None:
+        border = OxmlElement(f"w:{side}")
+        borders.append(border)
+    border.set(qn("w:val"), "single")
+    border.set(qn("w:sz"), str(size))
+    border.set(qn("w:space"), str(space))
+    border.set(qn("w:color"), color)
+
+
+def _set_paragraph_shading(paragraph, color: str) -> None:
+    properties = paragraph._p.get_or_add_pPr()
+    shading = properties.find(qn("w:shd"))
+    if shading is None:
+        shading = OxmlElement("w:shd")
+        properties.append(shading)
+    shading.set(qn("w:val"), "clear")
+    shading.set(qn("w:color"), "auto")
+    shading.set(qn("w:fill"), color)
+
+
+def _set_table_borders(table, color: str = RULE_GRAY, size: int = 4) -> None:
+    properties = table._tbl.tblPr
+    borders = properties.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        properties.append(borders)
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = borders.find(qn(f"w:{side}"))
+        if border is None:
+            border = OxmlElement(f"w:{side}")
+            borders.append(border)
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), str(size))
+        border.set(qn("w:color"), color)
+
+
+def _remove_table_borders(table) -> None:
+    properties = table._tbl.tblPr
+    borders = properties.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        properties.append(borders)
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = borders.find(qn(f"w:{side}"))
+        if border is None:
+            border = OxmlElement(f"w:{side}")
+            borders.append(border)
+        border.set(qn("w:val"), "nil")
+        border.set(qn("w:sz"), "0")
+        border.set(qn("w:space"), "0")
+        border.set(qn("w:color"), "auto")
 
 
 def _set_cell_margins(cell, top: int = 90, start: int = 110, bottom: int = 90, end: int = 110) -> None:
@@ -182,6 +292,13 @@ def _repeat_table_header(row) -> None:
         properties.append(OxmlElement("w:tblHeader"))
 
 
+def _keep_row_with_next(row) -> None:
+    """Avoid leaving a repeated table header alone at the bottom of a page."""
+    for cell in row.cells:
+        for paragraph in cell.paragraphs:
+            paragraph.paragraph_format.keep_with_next = True
+
+
 def _set_fixed_table_layout(table) -> None:
     properties = table._tbl.tblPr
     layout = properties.find(qn("w:tblLayout"))
@@ -189,6 +306,22 @@ def _set_fixed_table_layout(table) -> None:
         layout = OxmlElement("w:tblLayout")
         properties.append(layout)
     layout.set(qn("w:type"), "fixed")
+
+
+def _set_table_width(table, width_cm: float, *, indent_twips: int = 0) -> None:
+    properties = table._tbl.tblPr
+    width = properties.find(qn("w:tblW"))
+    if width is None:
+        width = OxmlElement("w:tblW")
+        properties.append(width)
+    width.set(qn("w:w"), str(Cm(width_cm).twips))
+    width.set(qn("w:type"), "dxa")
+    indent = properties.find(qn("w:tblInd"))
+    if indent is None:
+        indent = OxmlElement("w:tblInd")
+        properties.append(indent)
+    indent.set(qn("w:w"), str(indent_twips))
+    indent.set(qn("w:type"), "dxa")
 
 
 def _set_table_grid_widths(table, widths_cm: list[float]) -> None:
@@ -224,6 +357,23 @@ def _set_cell_text(cell, label: str, value: str) -> None:
     value_run = paragraph.add_run(value)
     value_run.font.color.rgb = BODY_COLOR
     _set_run_font(value_run, size=10.5, bold=True)
+
+
+def _set_score_cell(cell, label: str, value: str) -> None:
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    _shade(cell, "F6F8FB")
+    _set_cell_margins(cell, top=90, start=90, bottom=90, end=90)
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1.0
+    label_run = paragraph.add_run(f"{label}  ")
+    label_run.font.color.rgb = MUTED_COLOR
+    _set_run_font(label_run, size=9, bold=False)
+    value_run = paragraph.add_run(value)
+    value_run.font.color.rgb = RGBColor.from_string(NAVY)
+    _set_run_font(value_run, size=13, bold=True)
 
 
 def _add_part_title(document: Document, number: str, title: str, subtitle: str | None = None) -> None:
@@ -264,10 +414,17 @@ def _add_page_number(paragraph) -> None:
     end.set(qn("w:fldCharType"), "end")
     run._r.extend([begin, instruction, end])
     run.font.color.rgb = MUTED_COLOR
-    _set_run_font(run, size=8.5)
+    _set_run_font(run, size=CUSTOMER_BODY_FOOTER_SIZE_PT)
 
 
-def _configure_section(section, header_text: str = "AI 原生企业转型诊断档案") -> None:
+def _configure_section(
+    section,
+    header_text: str = "AI 原生企业转型诊断档案",
+    *,
+    footer_date: str | None = None,
+) -> None:
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
     section.top_margin = Cm(1.8)
     section.bottom_margin = Cm(1.7)
     section.left_margin = Cm(1.8)
@@ -276,33 +433,64 @@ def _configure_section(section, header_text: str = "AI 原生企业转型诊断�
     section.footer_distance = Cm(0.7)
     header = section.header.paragraphs[0]
     header.text = header_text
-    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    header.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    _set_paragraph_border(header, side="bottom", size=6, space=4)
     for run in header.runs:
         run.font.color.rgb = MUTED_COLOR
-        _set_run_font(run, size=8)
-    _add_page_number(section.footer.paragraphs[0])
+        _set_run_font(run, size=CUSTOMER_BODY_HEADER_SIZE_PT, bold=False)
+
+    footer = section.footer
+    footer.paragraphs[0].text = ""
+    footer_table = footer.add_table(rows=1, cols=3, width=Cm(REPORT_CONTENT_WIDTH_CM))
+    footer_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    footer_table.autofit = False
+    _set_fixed_table_layout(footer_table)
+    _set_table_width(footer_table, REPORT_CONTENT_WIDTH_CM)
+    footer_widths = [REPORT_CONTENT_WIDTH_CM / 3] * 3
+    _set_table_grid_widths(footer_table, footer_widths)
+    _remove_table_borders(footer_table)
+    footer_cells = footer_table.rows[0].cells
+    for cell, width in zip(footer_cells, footer_widths):
+        _set_cell_width(cell, width)
+        _set_cell_margins(cell, top=0, start=0, bottom=0, end=0)
+    label = "企业 AI 转型诊断"
+    if footer_date:
+        label = f"{label} | {footer_date}"
+    left = footer_cells[0].paragraphs[0]
+    left.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    left.paragraph_format.space_after = Pt(0)
+    left_run = left.add_run(label)
+    left_run.font.color.rgb = MUTED_COLOR
+    _set_run_font(left_run, size=CUSTOMER_BODY_FOOTER_SIZE_PT)
+    center = footer_cells[1].paragraphs[0]
+    center.paragraph_format.space_after = Pt(0)
+    _add_page_number(center)
 
 
 def _add_cover(document: Document, company_name: str) -> None:
-    for _ in range(4):
+    for _ in range(5):
         document.add_paragraph()
     eyebrow = document.add_paragraph()
     eyebrow.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = eyebrow.add_run("后台客户诊断档案")
-    run.font.color.rgb = RGBColor(47, 102, 157)
+    run = eyebrow.add_run(company_name)
+    run.font.color.rgb = MUTED_COLOR
     _set_run_font(run, size=11, bold=True)
     title = document.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_before = Pt(10)
     title.paragraph_format.space_after = Pt(16)
-    run = title.add_run(company_name)
-    run.font.color.rgb = RGBColor(13, 48, 82)
-    _set_run_font(run, size=25, bold=True)
+    run = title.add_run("AI 转型诊断完整档案")
+    run.font.color.rgb = RGBColor.from_string(NAVY)
+    _set_run_font(run, size=26, bold=True)
     subject = document.add_paragraph()
     subject.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subject.add_run("AI 转型诊断完整档案")
-    run.font.color.rgb = RGBColor(33, 74, 117)
-    _set_run_font(run, size=18, bold=True)
+    run = subject.add_run("从诊断共识走向可执行的 AI 转型路径")
+    run.font.color.rgb = RGBColor.from_string(RED)
+    _set_run_font(run, size=13, bold=True)
+    rule = document.add_paragraph()
+    rule.paragraph_format.space_before = Pt(20)
+    rule.paragraph_format.space_after = Pt(14)
+    _set_paragraph_border(rule, side="bottom", size=7, space=0)
     generated = document.add_paragraph()
     generated.alignment = WD_ALIGN_PARAGRAPH.CENTER
     generated.paragraph_format.space_before = Pt(34)
@@ -311,7 +499,7 @@ def _add_cover(document: Document, company_name: str) -> None:
     _set_run_font(run, size=9.5)
     confidentiality = document.add_paragraph()
     confidentiality.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    confidentiality.paragraph_format.space_before = Pt(120)
+    confidentiality.paragraph_format.space_before = Pt(100)
     run = confidentiality.add_run("内部资料 · 请妥善保管")
     run.font.color.rgb = MUTED_COLOR
     _set_run_font(run, size=9)
@@ -475,9 +663,19 @@ def _fit_label(draw: ImageDraw.ImageDraw, value: str, font, max_width: int) -> s
     return trimmed + suffix
 
 
+def _chart_dimension_label(dimension: dict) -> str:
+    """Return a concise chart-only label without changing the report snapshot."""
+    label = str(dimension.get("module_name") or "").strip()
+    module_code = str(dimension.get("module_code") or "").strip().upper()
+    if module_code == "M01" and "用户/客户" in label and "中心" in label:
+        return "用户/客户中心"
+    return label
+
+
 def _draw_chart_heading(draw: ImageDraw.ImageDraw, title: str, subtitle: str) -> None:
-    draw.text((46, 28), title, fill="#182942", font=_chart_font(34, bold=True))
-    draw.text((46, 76), subtitle, fill="#8190A6", font=_chart_font(21))
+    draw.text((46, 28), title, fill=f"#{BLUE}", font=_chart_font(31, bold=True))
+    draw.text((46, 74), subtitle, fill="#666666", font=_chart_font(20))
+    draw.line((46, 108, 1354, 108), fill=f"#{RULE_GRAY}", width=2)
 
 
 def _build_ranking_chart(dimensions: list[dict]) -> BytesIO:
@@ -500,13 +698,13 @@ def _build_ranking_chart(dimensions: list[dict]) -> BytesIO:
     for index, dimension in enumerate(ordered):
         rate = _dimension_rate(dimension)
         y = top + index * row_height + 8
-        label = _fit_label(draw, str(dimension.get("module_name") or ""), label_font, 285)
+        label = _fit_label(draw, _chart_dimension_label(dimension), label_font, 285)
         box = draw.textbbox((0, 0), label, font=label_font)
         draw.text((left - 28 - (box[2] - box[0]), y + 4), label, fill="#58677D", font=label_font)
         bar_width = max(4, int(chart_width * rate))
-        fill = "#FFF1DD" if rate < 0.5 else "#DCE9FF"
-        outline = "#F59E0B" if rate < 0.5 else "#3978E6"
-        draw.rounded_rectangle((left, y, left + bar_width, y + 30), radius=7, fill=fill, outline=outline, width=3)
+        fill = f"#{PALE_RED}" if rate < 0.5 else "#DDE6F1"
+        outline = f"#{RED}" if rate < 0.5 else f"#{NAVY}"
+        draw.rectangle((left, y, left + bar_width, y + 30), fill=fill, outline=outline, width=3)
         draw.text((min(left + bar_width + 14, right - 58), y + 2), f"{round(rate * 100)}%", fill="#34445B", font=value_font)
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
@@ -519,7 +717,7 @@ def _build_radar_chart(dimensions: list[dict]) -> BytesIO:
     size = 1040
     image = Image.new("RGB", (1400, size), "white")
     draw = ImageDraw.Draw(image)
-    _draw_chart_heading(draw, "AI 转型能力雷达图", "面积越大代表各项能力越均衡，橙色节点标记得分率低于 50% 的维度")
+    _draw_chart_heading(draw, "AI 转型能力雷达图", "面积越大代表各项能力越均衡，红色节点标记得分率低于 50% 的维度")
     center_x, center_y = 700, 565
     radius = 330
     angles = [(-math.pi / 2) + 2 * math.pi * index / count for index in range(count)]
@@ -532,15 +730,15 @@ def _build_radar_chart(dimensions: list[dict]) -> BytesIO:
     points = [(center_x + radius * rate * math.cos(angle), center_y + radius * rate * math.sin(angle)) for rate, angle in zip(values, angles)]
     overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
     overlay_draw = ImageDraw.Draw(overlay)
-    overlay_draw.polygon(points, fill=(126, 171, 244, 70), outline="#3278E8", width=6)
+    overlay_draw.polygon(points, fill=(23, 54, 93, 45), outline=f"#{NAVY}", width=6)
     image = Image.alpha_composite(image.convert("RGBA"), overlay)
     draw = ImageDraw.Draw(image)
     for (x, y), rate in zip(points, values):
-        color = "#F59E0B" if rate < 0.5 else "#3278E8"
+        color = f"#{RED}" if rate < 0.5 else f"#{NAVY}"
         draw.ellipse((x - 11, y - 11, x + 11, y + 11), fill=color, outline="white", width=4)
     label_font = _chart_font(23)
     for dimension, angle in zip(dimensions, angles):
-        label = _fit_label(draw, str(dimension.get("module_name") or ""), label_font, 250)
+        label = _fit_label(draw, _chart_dimension_label(dimension), label_font, 250)
         label_radius = radius + 74
         x = center_x + label_radius * math.cos(angle)
         y = center_y + label_radius * math.sin(angle)
@@ -568,7 +766,9 @@ def _add_inline_runs(paragraph, node: _HtmlNode | str, bold: bool = False) -> No
         text = re.sub(r"[ \t\r\n]+", " ", node)
         if text:
             run = paragraph.add_run(text)
-            _set_run_font(run, size=10, bold=bold)
+            _set_run_font(run, size=CUSTOMER_BODY_TEXT_SIZE_PT, bold=bold)
+            if bold:
+                run.font.color.rgb = RGBColor.from_string(NAVY)
         return
     if node.tag == "br":
         paragraph.add_run().add_break()
@@ -607,6 +807,7 @@ def _add_report_table(document: Document, node: _HtmlNode) -> None:
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     _set_fixed_table_layout(table)
+    _set_table_borders(table)
     classes = set(node.attrs.get("class", "").split())
     is_summary_table = "report-finding-table" in classes and not classes.intersection(
         {"report-cad-table", "report-contradiction-table", "report-workshop-table"}
@@ -616,7 +817,7 @@ def _add_report_table(document: Document, node: _HtmlNode) -> None:
     elif "report-cad-table" in classes and column_count == 3:
         ratios = (0.12, 0.40, 0.48)
     elif "report-contradiction-table" in classes and column_count == 3:
-        ratios = (0.29, 0.31, 0.40)
+        ratios = (0.25, 0.45, 0.30)
     elif is_summary_table and column_count == 3:
         ratios = (0.07, 0.30, 0.63)
     else:
@@ -627,10 +828,10 @@ def _add_report_table(document: Document, node: _HtmlNode) -> None:
         cells = table.add_row().cells
         for cell_index, cell in enumerate(cells):
             value = values[cell_index] if cell_index < len(values) else ""
-            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             _set_cell_width(cell, widths[cell_index])
             horizontal_margin = 35 if is_summary_table and cell_index == 0 else 100
-            _set_cell_margins(cell, top=90, start=horizontal_margin, bottom=90, end=horizontal_margin)
+            _set_cell_margins(cell, top=78, start=horizontal_margin, bottom=78, end=horizontal_margin)
             cell.text = value
             if is_header:
                 _shade(cell, NAVY)
@@ -642,11 +843,21 @@ def _add_report_table(document: Document, node: _HtmlNode) -> None:
                 if cell_index == 0 and is_summary_table:
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in paragraph.runs:
-                    run.font.color.rgb = RGBColor(255, 255, 255) if is_header else BODY_COLOR
-                    font_size = 8 if column_count >= 4 or (is_summary_table and cell_index == 0) else 9
+                    if is_header:
+                        run.font.color.rgb = RGBColor(255, 255, 255)
+                    elif is_summary_table and cell_index == 1:
+                        run.font.color.rgb = RGBColor.from_string(RED)
+                    else:
+                        run.font.color.rgb = BODY_COLOR
+                    font_size = (
+                        8.5
+                        if column_count >= 4 or (is_summary_table and cell_index == 0)
+                        else CUSTOMER_BODY_TABLE_SIZE_PT
+                    )
                     _set_run_font(run, size=font_size, bold=is_header or (cell_index == 1 and is_summary_table))
         if is_header:
             _repeat_table_header(table.rows[-1])
+            _keep_row_with_next(table.rows[-1])
             _prevent_row_split(table.rows[-1])
     if "report-cad-table" in classes and len(table.rows) > 2:
         core_conclusion = parsed_rows[1][0][0] if parsed_rows[1][0] else ""
@@ -664,6 +875,32 @@ def _add_report_table(document: Document, node: _HtmlNode) -> None:
     document.add_paragraph().paragraph_format.space_after = Pt(0)
 
 
+def _add_report_callout(document: Document, node: _HtmlNode) -> None:
+    classes = set(node.attrs.get("class", "").split())
+    is_contact = "report-contact-callout" in classes
+    paragraph = document.add_paragraph()
+    paragraph.paragraph_format.left_indent = Cm(0.28)
+    paragraph.paragraph_format.right_indent = Cm(0.18)
+    paragraph.paragraph_format.space_before = Pt(14 if is_contact else 7)
+    paragraph.paragraph_format.space_after = Pt(4 if is_contact else 10)
+    paragraph.paragraph_format.line_spacing = 1.35 if is_contact else 1.3
+    paragraph.paragraph_format.keep_together = True
+    _set_paragraph_shading(paragraph, PALE_RED)
+    _set_paragraph_border(paragraph, side="left", color=RED, size=18, space=5)
+    if is_contact:
+        lines = [_normalized_node_text(item) for item in _find_descendants(node, {"p"})]
+        for index, line in enumerate(value for value in lines if value):
+            if index:
+                paragraph.add_run().add_break()
+            run = paragraph.add_run(line)
+            run.font.color.rgb = RGBColor.from_string(NAVY)
+            _set_run_font(run, size=10, bold=True)
+    else:
+        run = paragraph.add_run(_normalized_node_text(node))
+        run.font.color.rgb = RGBColor.from_string(NAVY)
+        _set_run_font(run, size=CUSTOMER_BODY_TEXT_SIZE_PT, bold=True)
+
+
 def _render_report_nodes(
     document: Document,
     nodes: Iterable[_HtmlNode | str],
@@ -678,39 +915,55 @@ def _render_report_nodes(
                 _set_paragraph_font(paragraph)
             continue
         classes = set(node.attrs.get("class", "").split())
-        if node.tag == "h2":
+        if "report-diagnosis-callout" in classes:
+            _add_report_callout(document, node)
+        elif node.tag == "h2":
             heading_text = _normalized_node_text(node)
-            paragraph = document.add_paragraph()
-            paragraph.paragraph_format.space_before = Pt(14)
-            paragraph.paragraph_format.space_after = Pt(7)
-            paragraph.paragraph_format.keep_with_next = True
+            paragraph = document.add_paragraph(style="Heading 1")
             run = paragraph.add_run(heading_text)
-            run.font.color.rgb = RGBColor(20, 76, 112)
-            _set_run_font(run, size=15, bold=True)
+            run.font.color.rgb = RGBColor.from_string(NAVY)
+            _set_run_font(run, size=CUSTOMER_BODY_H1_SIZE_PT, bold=True)
             if heading_text.startswith("二、能力成熟度") and dimensions and not chart_state["inserted"]:
                 _add_maturity_charts(document, dimensions)
                 chart_state["inserted"] = True
         elif node.tag in {"h3", "h4"} or "report-module-head" in classes:
-            paragraph = document.add_paragraph()
-            paragraph.paragraph_format.space_before = Pt(9)
-            paragraph.paragraph_format.space_after = Pt(5)
-            paragraph.paragraph_format.keep_with_next = True
+            paragraph = document.add_paragraph(style="Heading 2")
             run = paragraph.add_run(_normalized_node_text(node))
-            run.font.color.rgb = RGBColor(33, 74, 117)
-            _set_run_font(run, size=11.5, bold=True)
+            run.font.color.rgb = RGBColor.from_string(BLUE)
+            _set_run_font(run, size=CUSTOMER_BODY_SUBHEAD_SIZE_PT, bold=True)
         elif node.tag == "p" or "report-module-body" in classes:
             paragraph = document.add_paragraph()
-            paragraph.paragraph_format.line_spacing = 1.25
-            paragraph.paragraph_format.space_after = Pt(5)
+            is_lead = "report-lead" in classes
+            is_accent = bool(
+                classes.intersection({"report-module-judgment", "report-section-note--accent"})
+                or "report-section-note" in classes
+            )
+            paragraph.paragraph_format.line_spacing = 1.25 if is_lead else CUSTOMER_BODY_LINE_SPACING
+            paragraph.paragraph_format.space_after = Pt(
+                7 if is_lead else 5 if is_accent else CUSTOMER_BODY_PARAGRAPH_AFTER_PT
+            )
+            if is_lead or is_accent:
+                paragraph.paragraph_format.keep_with_next = True
             for child in node.children:
                 _add_inline_runs(paragraph, child)
+            if is_lead:
+                for run in paragraph.runs:
+                    run.font.color.rgb = RGBColor.from_string(RED)
+                    _set_run_font(run, size=CUSTOMER_BODY_LEAD_SIZE_PT, bold=True)
+            elif is_accent:
+                paragraph.paragraph_format.space_before = Pt(1)
+                paragraph.paragraph_format.line_spacing = 1.1
+                for run in paragraph.runs:
+                    run.font.color.rgb = RGBColor.from_string(DARK_RED)
+                    _set_run_font(run, size=9.5, bold=False)
         elif node.tag == "table":
             _add_report_table(document, node)
         elif node.tag in {"ol", "ul"}:
             list_style = "List Number" if node.tag == "ol" else "List Bullet"
             for item in [child for child in node.children if isinstance(child, _HtmlNode) and child.tag == "li"]:
                 paragraph = document.add_paragraph(style=list_style)
-                paragraph.paragraph_format.space_after = Pt(5)
+                paragraph.paragraph_format.space_after = Pt(CUSTOMER_BODY_PARAGRAPH_AFTER_PT)
+                paragraph.paragraph_format.line_spacing = CUSTOMER_BODY_LINE_SPACING
                 for child in item.children:
                     _add_inline_runs(paragraph, child)
         elif node.tag in {"article", "section", "div", "main", "body", "root"}:
@@ -724,7 +977,7 @@ def build_final_diagnosis_report(document: Document, report: Report) -> None:
     成熟度排行图与雷达图；调整这里即可让两边同步变化。
     """
     parser = _ReportHtmlParser()
-    parser.feed(sanitize_report_content(report.html_content))
+    parser.feed(build_report_presentation_html(report.html_content, report.summary_json))
     _render_report_nodes(document, parser.root.children, _load_report_dimensions(report))
 
 
@@ -801,7 +1054,10 @@ def _report_number(report: Report) -> str:
 
 def _report_date(report: Report) -> str:
     created = getattr(report, "created_at", None)
-    return to_china_time(created).strftime("%Y-%m-%d") if created else "未记录"
+    if not created:
+        return "未记录"
+    local_date = to_china_time(created)
+    return f"{local_date.year} 年 {local_date.month} 月 {local_date.day} 日"
 
 
 def _score_number_text(value: float) -> str:
@@ -812,55 +1068,218 @@ def _score_rate_text(score: CustomerReportScore) -> str:
     return f"{round(score.score_rate * 100)}%"
 
 
+def _short_company_name(company_name: str) -> str:
+    normalized = company_name.strip() or "企业"
+    for suffix in (
+        "集团股份有限公司",
+        "集团有限责任公司",
+        "股份有限公司",
+        "有限责任公司",
+        "集团有限公司",
+        "有限公司",
+    ):
+        if normalized.endswith(suffix) and len(normalized) > len(suffix):
+            return normalized[: -len(suffix)].strip()
+    return normalized
+
+
+def _cover_title_size(company_name: str) -> float:
+    """Keep unusually long legal-name derivatives on one title line when possible."""
+    length = len(re.sub(r"\s+", "", _short_company_name(company_name)))
+    if length <= 10:
+        return 26.0
+    if length <= 16:
+        return 23.0
+    return 20.5
+
+
+def _cover_metadata_size(value: str) -> float:
+    compact_length = len(re.sub(r"\s+", "", value))
+    if compact_length <= 22:
+        return 9.5
+    if compact_length <= 30:
+        return 9.0
+    return 8.5
+
+
+def _configure_customer_first_page(section) -> None:
+    section.different_first_page_header_footer = True
+    for story in (section.first_page_header, section.first_page_footer):
+        paragraph = story.paragraphs[0]
+        paragraph.text = ""
+        properties = paragraph._p.get_or_add_pPr()
+        borders = properties.find(qn("w:pBdr"))
+        if borders is not None:
+            properties.remove(borders)
+
+
+def _set_cover_metadata_cell(cell, text: str, *, label: bool) -> None:
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    _shade(cell, PALE_GRAY)
+    _set_cell_margins(cell, top=55, start=150, bottom=55, end=150)
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing = 1.0
+    run = paragraph.add_run(text)
+    run.font.color.rgb = RGBColor(64, 74, 88) if label else BODY_COLOR
+    _set_run_font(run, size=9.5 if label else _cover_metadata_size(text), bold=label)
+
+
 def _add_customer_report_head(
     document: Document,
     company_name: str,
     report: Report,
-    score: CustomerReportScore,
+    *,
+    internal_marker: str | None = None,
 ) -> None:
-    eyebrow = document.add_paragraph()
-    eyebrow.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    eyebrow.paragraph_format.space_before = Pt(6)
-    run = eyebrow.add_run("AI 原生转型诊断报告")
-    run.font.color.rgb = RGBColor(47, 102, 157)
-    _set_run_font(run, size=11, bold=True)
+    """Named first-page override: approved_reference_editorial_cover.
 
-    title = document.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.paragraph_format.space_before = Pt(10)
-    title.paragraph_format.space_after = Pt(14)
-    run = title.add_run(company_name)
-    run.font.color.rgb = RGBColor(13, 48, 82)
-    _set_run_font(run, size=24, bold=True)
+    The existing report body keeps the standard_business_brief contract; this
+    explicit A4 cover override follows the editorial_cover hierarchy only.
+    """
+    if internal_marker:
+        marker = document.add_paragraph()
+        marker.paragraph_format.space_before = Pt(0)
+        marker.paragraph_format.space_after = Pt(0)
+        marker_run = marker.add_run(internal_marker)
+        marker_run.font.color.rgb = MUTED_COLOR
+        _set_run_font(marker_run, size=8.5, bold=True)
 
+    spacer = document.add_paragraph()
+    spacer.paragraph_format.space_before = Pt(0)
+    spacer.paragraph_format.space_after = Pt(58 if internal_marker else 70)
+    spacer.paragraph_format.line_spacing = 1.0
+
+    company = document.add_paragraph()
+    company.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    company.paragraph_format.space_before = Pt(0)
+    company.paragraph_format.space_after = Pt(46)
+    run = company.add_run(company_name)
+    run.font.color.rgb = RGBColor(96, 106, 120)
+    _set_run_font(run, size=10.5, bold=False)
+
+    title_first = document.add_paragraph()
+    title_first.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_first.paragraph_format.space_before = Pt(0)
+    title_first.paragraph_format.space_after = Pt(2)
+    title_first.paragraph_format.line_spacing = 1.0
+    run = title_first.add_run(f"{_short_company_name(company_name)} AI 原生转型")
+    run.font.color.rgb = RGBColor.from_string(NAVY)
+    _set_run_font(run, size=_cover_title_size(company_name), bold=True)
+
+    title_second = document.add_paragraph()
+    title_second.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_second.paragraph_format.space_before = Pt(0)
+    title_second.paragraph_format.space_after = Pt(22)
+    title_second.paragraph_format.line_spacing = 1.0
+    run = title_second.add_run("诊断报告")
+    run.font.color.rgb = RGBColor.from_string(NAVY)
+    _set_run_font(run, size=25.5, bold=True)
+
+    subtitle = document.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle.paragraph_format.space_before = Pt(0)
+    subtitle.paragraph_format.space_after = Pt(38)
+    subtitle.paragraph_format.line_spacing = 1.0
+    run = subtitle.add_run("从诊断共识走向可执行的 AI 转型路径")
+    run.font.color.rgb = RGBColor.from_string(RED)
+    _set_run_font(run, size=12.5, bold=False)
+
+    rule = document.add_paragraph()
+    rule.paragraph_format.left_indent = Cm((REPORT_CONTENT_WIDTH_CM - CUSTOMER_COVER_RULE_WIDTH_CM) / 2)
+    rule.paragraph_format.right_indent = Cm((REPORT_CONTENT_WIDTH_CM - CUSTOMER_COVER_RULE_WIDTH_CM) / 2)
+    rule.paragraph_format.space_before = Pt(0)
+    rule.paragraph_format.space_after = Pt(20)
+    rule.paragraph_format.line_spacing = 1.0
+    _set_paragraph_border(rule, side="bottom", size=7, space=0)
+
+    metadata = (
+        ("评估对象", company_name),
+        ("报告类型", "AI 原生企业转型诊断报告"),
+        ("评估范围", "企业 AI 原生能力成熟度与转型路径"),
+        ("报告编号", _report_number(report)),
+        ("出具日期", _report_date(report)),
+    )
     meta = document.add_table(rows=0, cols=2)
-    meta.style = "Table Grid"
     meta.alignment = WD_TABLE_ALIGNMENT.CENTER
     meta.autofit = False
     _set_fixed_table_layout(meta)
-    meta_widths = [REPORT_CONTENT_WIDTH_CM / 2] * 2
-    _set_table_grid_widths(meta, meta_widths)
-    meta_cells = meta.add_row().cells
-    _set_cell_text(meta_cells[0], "报告编号", _report_number(report))
-    _set_cell_text(meta_cells[1], "报告日期", _report_date(report))
-    for cell, width in zip(meta_cells, meta_widths):
-        _set_cell_width(cell, width)
-    _prevent_row_split(meta.rows[-1])
+    _set_table_width(meta, CUSTOMER_COVER_META_WIDTH_CM)
+    _set_table_grid_widths(
+        meta,
+        [CUSTOMER_COVER_META_LABEL_WIDTH_CM, CUSTOMER_COVER_META_VALUE_WIDTH_CM],
+    )
+    _remove_table_borders(meta)
+    for label, value in metadata:
+        cells = meta.add_row().cells
+        _set_cover_metadata_cell(cells[0], label, label=True)
+        _set_cover_metadata_cell(cells[1], value, label=False)
+        _set_cell_width(cells[0], CUSTOMER_COVER_META_LABEL_WIDTH_CM)
+        _set_cell_width(cells[1], CUSTOMER_COVER_META_VALUE_WIDTH_CM)
+        _prevent_row_split(meta.rows[-1])
 
-    score_table = document.add_table(rows=0, cols=3)
-    score_table.style = "Table Grid"
+    footer = document.add_paragraph()
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer.paragraph_format.space_before = Pt(26)
+    footer.paragraph_format.space_after = Pt(0)
+    footer.paragraph_format.line_spacing = 1.0
+    run = footer.add_run("让 AI 从局部工具走向企业级生产力")
+    run.font.color.rgb = RGBColor.from_string(NAVY)
+    _set_run_font(run, size=10.5, bold=True)
+
+
+def _add_customer_report_score(document: Document, score: CustomerReportScore) -> None:
+    heading = document.add_paragraph()
+    heading.paragraph_format.space_before = Pt(0)
+    heading.paragraph_format.space_after = Pt(5)
+    heading.paragraph_format.keep_with_next = True
+    run = heading.add_run("诊断结果概览")
+    run.font.color.rgb = RGBColor.from_string(NAVY)
+    _set_run_font(run, size=13, bold=True)
+    _set_paragraph_border(heading, side="left", size=18, space=6)
+
+    score_table = document.add_table(rows=1, cols=2)
     score_table.alignment = WD_TABLE_ALIGNMENT.CENTER
     score_table.autofit = False
     _set_fixed_table_layout(score_table)
-    widths = [REPORT_CONTENT_WIDTH_CM / 3] * 3
+    _set_table_width(score_table, REPORT_CONTENT_WIDTH_CM)
+    _remove_table_borders(score_table)
+    widths = [REPORT_CONTENT_WIDTH_CM / 2] * 2
     _set_table_grid_widths(score_table, widths)
-    score_cells = score_table.add_row().cells
-    _set_cell_text(score_cells[0], "诊断总分", _score_number_text(score.total_score))
-    _set_cell_text(score_cells[1], "满分", _score_number_text(score.max_score))
-    _set_cell_text(score_cells[2], "综合得分率", _score_rate_text(score))
+    score_cells = score_table.rows[0].cells
+    _set_score_cell(
+        score_cells[0],
+        "诊断得分",
+        f"{_score_number_text(score.total_score)} / {_score_number_text(score.max_score)}",
+    )
+    _set_score_cell(score_cells[1], "综合得分率", _score_rate_text(score))
     for cell, width in zip(score_cells, widths):
         _set_cell_width(cell, width)
+    score_table.rows[0].height = Pt(30)
+    score_table.rows[0].height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
     _prevent_row_split(score_table.rows[-1])
+
+    progress = document.add_table(rows=1, cols=2)
+    progress.alignment = WD_TABLE_ALIGNMENT.CENTER
+    progress.autofit = False
+    _set_fixed_table_layout(progress)
+    _set_table_width(progress, REPORT_CONTENT_WIDTH_CM)
+    _remove_table_borders(progress)
+    completed = max(0.0, min(1.0, score.score_rate)) * REPORT_CONTENT_WIDTH_CM
+    progress_widths = [completed, REPORT_CONTENT_WIDTH_CM - completed]
+    _set_table_grid_widths(progress, progress_widths)
+    progress.rows[0].height = Pt(3)
+    progress.rows[0].height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+    for index, (cell, width) in enumerate(zip(progress.rows[0].cells, progress_widths)):
+        _set_cell_width(cell, max(width, 0.01))
+        _set_cell_margins(cell, top=0, start=0, bottom=0, end=0)
+        _shade(cell, PROGRESS_BLUE if index == 0 else PROGRESS_GRAY)
+        cell.paragraphs[0].paragraph_format.space_after = Pt(0)
+
+    spacer = document.add_paragraph()
+    spacer.paragraph_format.space_after = Pt(2)
 
 
 def generate_customer_report_docx(
@@ -876,14 +1295,50 @@ def generate_customer_report_docx(
     """
     document = Document()
     _set_document_font(document)
-    _configure_section(document.sections[0], header_text="AI 原生转型诊断报告")
+    normalized_company = company_name or "企业"
+    _configure_section(
+        document.sections[0],
+        header_text=f"{normalized_company} | AI 原生转型诊断报告",
+        footer_date=_report_date(report),
+    )
+    _configure_customer_first_page(document.sections[0])
     persisted_score = score if score is not None else customer_report_score(report)
-    _add_customer_report_head(document, company_name or "企业", report, persisted_score)
+    _add_customer_report_head(document, normalized_company, report)
     document.add_page_break()
+    _add_customer_report_score(document, persisted_score)
     build_final_diagnosis_report(document, report)
     output = BytesIO()
     document.save(output)
     return output.getvalue()
+
+
+def _append_customer_report_to_internal_document(
+    document: Document,
+    company_name: str,
+    report: Report,
+) -> None:
+    """Append the complete customer deliverable as part three of the archive."""
+
+    section = document.add_section(WD_SECTION.NEW_PAGE)
+    section.header.is_linked_to_previous = False
+    section.footer.is_linked_to_previous = False
+    section.first_page_header.is_linked_to_previous = False
+    section.first_page_footer.is_linked_to_previous = False
+    _configure_section(
+        section,
+        header_text=f"{company_name} | AI 原生转型诊断报告",
+        footer_date=_report_date(report),
+    )
+    _configure_customer_first_page(section)
+    _add_customer_report_head(
+        document,
+        company_name,
+        report,
+        internal_marker="三、客户最终诊断报告",
+    )
+    document.add_page_break()
+    _add_customer_report_score(document, customer_report_score(report))
+    build_final_diagnosis_report(document, report)
 
 
 def generate_lead_export_docx(
@@ -957,13 +1412,16 @@ def generate_lead_export_docx(
     )
     _add_research_section(document, _load_research(report))
 
-    _new_part(
-        document,
-        "三、",
-        "客户最终诊断报告",
-        "以下内容直接取自已发送给客户的最终报告快照，本次导出不重新生成。",
-    )
-    _add_final_report(document, report, final_report_sent)
+    if report and final_report_sent and report.html_content:
+        _append_customer_report_to_internal_document(document, company_name, report)
+    else:
+        _new_part(
+            document,
+            "三、",
+            "客户最终诊断报告",
+            "以下内容直接取自已发送给客户的最终报告快照，本次导出不重新生成。",
+        )
+        _add_final_report(document, report, final_report_sent)
 
     output = BytesIO()
     document.save(output)

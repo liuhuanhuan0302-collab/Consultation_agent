@@ -19,7 +19,12 @@ from app.models import (
 from app.service.company_research import research_company
 from app.service.email_service import send_report_pdf_email
 from app.service.lead_status import sync_lead_processing_status
-from app.service.pdf_service import customer_report_filename, render_report_pdf_bytes, report_public_url
+from app.service.pdf_service import (
+    CustomerPdfConversionError,
+    customer_report_filename,
+    render_report_pdf_bytes,
+    report_public_url,
+)
 from app.service.reporting import generate_report_content, report_generation_semaphore
 from app.utils.time_utils import utc_now
 
@@ -279,7 +284,11 @@ async def process_report_delivery_job(job_id: int) -> bool:
         if stop_event.is_set():
             return False
 
-        if not (report.status == ReportStatus.generated.value and report.html_content):
+        reusable_report_statuses = (
+            ReportStatus.generated.value,
+            ReportStatus.fallback.value,
+        )
+        if not (report.status in reusable_report_statuses and report.html_content):
             stage = "research"
             report.status = ReportStatus.pending.value
             report.research_status = CompanyResearchStatus.processing.value
@@ -418,7 +427,14 @@ async def process_report_delivery_job(job_id: int) -> bool:
                 "email": "邮件发送失败",
             }
             job.last_error = f"{stage_labels.get(stage, '报告任务失败')}：{exc}"
-            if job.attempts >= job.max_attempts:
+            terminal_attachment_failure = stage == "pdf" and isinstance(exc, CustomerPdfConversionError)
+            if terminal_attachment_failure:
+                job.status = ReportDeliveryStatus.failed.value
+                job.last_error = (
+                    "PDF 附件生成失败：Word→PDF 已连续尝试 3 次，未发送邮件，已转人工处理；"
+                    "请修复服务器转换环境后点击“重新生成附件并发送”"
+                )
+            elif job.attempts >= job.max_attempts:
                 job.status = ReportDeliveryStatus.failed.value
             else:
                 job.status = ReportDeliveryStatus.queued.value

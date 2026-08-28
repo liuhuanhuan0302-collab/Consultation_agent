@@ -26,19 +26,29 @@ from reportlab.graphics.shapes import Circle, Drawing, Line, Polygon, Rect, Stri
 from app.core.config import get_settings
 from app.models.report import Report
 from app.service.lead_export_service import (
+    CUSTOMER_BODY_OVERRIDE,
     CustomerReportScore,
     CustomerReportScoreError,
     customer_report_score,
     generate_customer_report_docx,
 )
-from app.service.report_content import sanitize_report_content
+from app.service.report_content import build_report_presentation_html, sanitize_report_content
 
 
 TAG_RE = re.compile(r"<[^>]+>")
 REPORT_FILENAME_INVALID_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 logger = logging.getLogger(__name__)
 
-REPORT_SECTION_TITLES = [
+REPORT_NAVY = "#17365D"
+REPORT_RED = "#C00000"
+REPORT_BLUE = "#2F5597"
+REPORT_PALE_RED = "#FBE9E9"
+REPORT_PALE_GRAY = "#F1F4F8"
+REPORT_RULE_GRAY = "#D9E2F3"
+REPORT_INK = "#252525"
+REPORT_MUTED = "#666666"
+
+LEGACY_REPORT_SECTION_TITLES = [
     "一、执行摘要",
     "二、能力成熟度分析",
     "三、关键矛盾与核心诊断",
@@ -46,17 +56,38 @@ REPORT_SECTION_TITLES = [
     "五、优先 AI 场景与案例",
     "六、管理层行动建议",
 ]
-REPORT_SECTION_KEYWORDS = [
+V2_REPORT_SECTION_TITLES = [
+    "一、执行摘要",
+    "二、能力成熟度分析",
+    "三、关键矛盾与核心诊断",
+    "四、工作坊议题地图",
+    "五、优先 AI 场景建议",
+]
+LEGACY_REPORT_SECTION_KEYWORDS = [
     "执行摘要",
     "能力成熟度分析",
     "关键矛盾与核心诊断",
     "工作坊议题地图",
     "管理层行动建议",
 ]
+V2_REPORT_SECTION_KEYWORDS = [
+    "执行摘要",
+    "能力成熟度分析",
+    "关键矛盾与核心诊断",
+    "工作坊议题地图",
+    "优先 AI 场景建议",
+]
 
 
 class ReportPdfValidationError(RuntimeError):
     """最终 PDF 与固定报告模板不一致，禁止发送给客户。"""
+
+
+class CustomerPdfConversionError(RuntimeError):
+    """Customer DOCX conversion exhausted its bounded retry budget."""
+
+
+DOCX_CONVERSION_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +114,37 @@ def report_company_name(report: Report) -> str:
     return str(report.title or "企业").split(" AI 原生转型诊断报告", 1)[0].strip() or "企业"
 
 
+def report_short_company_name(report: Report) -> str:
+    company_name = report_company_name(report)
+    for suffix in (
+        "集团股份有限公司",
+        "集团有限责任公司",
+        "股份有限公司",
+        "有限责任公司",
+        "集团有限公司",
+        "有限公司",
+    ):
+        if company_name.endswith(suffix) and len(company_name) > len(suffix):
+            return company_name[: -len(suffix)].strip()
+    return company_name
+
+
+def report_cover_title_size_px(report: Report) -> int:
+    length = len(re.sub(r"\s+", "", report_short_company_name(report)))
+    if length <= 10:
+        return 34
+    if length <= 16:
+        return 30
+    return 27
+
+
+def report_date_text(report: Report) -> str:
+    value = getattr(report, "created_at", None)
+    if not value:
+        return "未记录"
+    return f"{value.year} 年 {value.month} 月 {value.day} 日"
+
+
 def customer_report_snapshot(report: Report) -> CustomerReportSnapshot:
     """在当前数据库线程复制渲染字段；后台线程只接收该纯值快照产生的 bytes。"""
     return CustomerReportSnapshot(
@@ -106,7 +168,14 @@ def customer_report_filename(report: Report) -> str:
 
 def validate_report_html(report: Report) -> None:
     content = report.html_content or ""
-    missing = [keyword for keyword in REPORT_SECTION_KEYWORDS if keyword not in content]
+    try:
+        summary = json.loads(report.summary_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        summary = {}
+    format_version = summary.get("report_format_version")
+    is_v2 = isinstance(format_version, int) and not isinstance(format_version, bool) and format_version >= 2
+    keywords = V2_REPORT_SECTION_KEYWORDS if is_v2 else LEGACY_REPORT_SECTION_KEYWORDS
+    missing = [keyword for keyword in keywords if keyword not in content]
     if missing:
         raise ReportPdfValidationError(f"网页版报告缺少章节关键词：{', '.join(missing)}")
 
@@ -181,10 +250,11 @@ def render_report_charts_html(dimensions: list[dict]) -> str:
         y = 48 + index * (bar_height + row_gap)
         rate = _dimension_rate(item)
         label = escape(_dimension_name(item))
+        bar_class = "bar-fill bar-risk" if rate < 0.5 else "bar-fill"
         bar_rows.append(
             f'<text x="0" y="{y + 18}" class="chart-label">{label}</text>'
-            f'<rect x="150" y="{y}" width="290" height="{bar_height}" rx="6" class="bar-bg" />'
-            f'<rect x="150" y="{y}" width="{290 * rate:.2f}" height="{bar_height}" rx="6" class="bar-fill" />'
+            f'<rect x="150" y="{y}" width="290" height="{bar_height}" class="bar-bg" />'
+            f'<rect x="150" y="{y}" width="{290 * rate:.2f}" height="{bar_height}" class="{bar_class}" />'
             f'<text x="455" y="{y + 18}" class="chart-value">{round(rate * 100)}%</text>'
         )
     bar_svg = (
@@ -216,7 +286,8 @@ def render_report_charts_html(dimensions: list[dict]) -> str:
     value_points = [radar_point(index, _dimension_rate(item)) for index, item in enumerate(ordered)]
     value_text = " ".join(f"{x:.1f},{y:.1f}" for x, y in value_points)
     value_nodes = "".join(
-        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" class="radar-point" />' for x, y in value_points
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" class="radar-point{" radar-risk" if _dimension_rate(item) < 0.5 else ""}" />'
+        for (x, y), item in zip(value_points, ordered)
     )
     radar_svg = (
         f'<svg viewBox="0 0 {radar_width} {radar_height}" role="img" '
@@ -225,10 +296,10 @@ def render_report_charts_html(dimensions: list[dict]) -> str:
         f'<polygon points="{value_text}" class="radar-value" />{value_nodes}</svg>'
     )
     return f"""
-    <section class="chart-grid">
-      <div class="chart-card"><div class="chart-card-header"><span class="card-accent"></span>
+    <section class="chart-grid" aria-label="能力成熟度图表">
+      <div class="chart-card"><div class="chart-card-header">
         <h3>能力成熟度排行</h3><p>按当前启用维度的得分率从低到高排列</p></div>{bar_svg}</div>
-      <div class="chart-card"><div class="chart-card-header"><span class="card-accent radar-accent"></span>
+      <div class="chart-card"><div class="chart-card-header">
         <h3>AI 转型能力雷达图</h3><p>按当前启用维度生成，面积越大代表能力越均衡</p></div>{radar_svg}</div>
     </section>
     """
@@ -307,10 +378,11 @@ def make_radar_chart(dimensions: list[dict], font_name: str) -> Drawing:
 
 
 async def render_report_pdf_bytes(report: Report) -> bytes:
-    """渲染客户 PDF：优先 Word→PDF（LibreOffice），失败时按配置回退 Chromium。
+    """Render the email attachment strictly through customer DOCX -> PDF.
 
-    客户 PDF 与内部 Word 档案第三部分共用同一套 Word 排版组件，保证
-    字体、深蓝表头、表格列宽、行距和图表在两份文档中一致。
+    The customer Word layout is the sole attachment source. Conversion and PDF
+    validation are attempted at most three times; browser HTML is never used as
+    a customer email attachment.
     """
     settings = get_settings()
     # Report 可能仍绑定 SQLAlchemy Session。所有属性和关系都必须在当前
@@ -319,35 +391,31 @@ async def render_report_pdf_bytes(report: Report) -> bytes:
     snapshot = customer_report_snapshot(report)
     validate_report_html(snapshot)
     persisted_score = validate_report_score_snapshot(snapshot)
-    fallback_html: bytes | None = None
-    if settings.pdf_docx_render:
+    if not settings.pdf_docx_render:
+        raise CustomerPdfConversionError("客户邮件附件仅允许 Word→PDF，当前未启用该转换")
+    docx_bytes = generate_customer_report_docx(
+        snapshot,
+        snapshot.company_name,
+        score=persisted_score,
+    )
+    last_error: Exception | None = None
+    for attempt in range(1, DOCX_CONVERSION_ATTEMPTS + 1):
         try:
-            docx_bytes = generate_customer_report_docx(
-                snapshot,
-                snapshot.company_name,
-                score=persisted_score,
-            )
             pdf_bytes = await asyncio.to_thread(convert_customer_docx_to_pdf, docx_bytes)
             validate_report_pdf_bytes(pdf_bytes)
             return pdf_bytes
         except Exception as exc:
-            logger.warning("Word→PDF 客户报告渲染失败，将评估 Chromium fallback：%s", exc, exc_info=True)
-            if not (settings.pdf_docx_fallback_to_browser and settings.pdf_browser_render):
-                logger.error(
-                    "Word→PDF 失败且 Chromium fallback 不可用：fallback_enabled=%s browser_enabled=%s",
-                    settings.pdf_docx_fallback_to_browser,
-                    settings.pdf_browser_render,
-                )
-                raise
-            logger.info("按配置回退 Chromium HTML→PDF 渲染")
-            fallback_html = render_report_html_attachment(snapshot)
-    if not settings.pdf_browser_render:
-        raise ReportPdfValidationError("Word 与浏览器 PDF 渲染均未启用，已阻止发送报告")
-    if fallback_html is None:
-        fallback_html = render_report_html_attachment(snapshot)
-    pdf_bytes = await asyncio.to_thread(render_report_pdf_bytes_with_browser_html, fallback_html)
-    validate_report_pdf_bytes(pdf_bytes)
-    return pdf_bytes
+            last_error = exc
+            logger.warning(
+                "Word→PDF 客户附件转换失败（%s/%s）：%s",
+                attempt,
+                DOCX_CONVERSION_ATTEMPTS,
+                exc,
+                exc_info=True,
+            )
+    raise CustomerPdfConversionError(
+        f"Word→PDF 客户附件转换连续失败 {DOCX_CONVERSION_ATTEMPTS} 次，已转人工处理"
+    ) from last_error
 
 
 def libreoffice_executable() -> str:
@@ -593,11 +661,27 @@ def render_report_html_attachment(report: Report) -> bytes:
     except json.JSONDecodeError:
         summary = {}
     company_name = report_company_name(report)
+    short_company_name = report_short_company_name(report)
     report_number = f"RPT-{report.id:06d}" if isinstance(report.id, int) else "RPT-UNKNOWN"
-    report_date = report.created_at.strftime("%Y-%m-%d") if report.created_at else "-"
+    report_date = report_date_text(report)
+    report_date_iso = report.created_at.strftime("%Y-%m-%d") if isinstance(report.created_at, datetime) else ""
+    cover_title_size = report_cover_title_size_px(report)
     score = summary.get("score") or {}
     dimensions = summary.get("dimensions") or []
     charts = render_report_charts_html(dimensions)
+    body_html = build_report_presentation_html(report.html_content, report.summary_json)
+    first_heading = re.search(r"<h2(?:\s[^>]*)?>", body_html, flags=re.IGNORECASE)
+    second_heading = (
+        re.search(r"<h2(?:\s[^>]*)?>", body_html[first_heading.end() :], flags=re.IGNORECASE)
+        if first_heading
+        else None
+    )
+    if first_heading and second_heading:
+        executive_end = first_heading.end() + second_heading.start()
+        executive_summary_html = body_html[first_heading.start() : executive_end]
+        body_html = body_html[: first_heading.start()] + body_html[executive_end:]
+    else:
+        executive_summary_html = ""
     score_rate = score.get("score_rate")
     score_rate_text = "-" if score_rate is None else f"{round(float(score_rate) * 100)}%"
     html = f"""<!doctype html>
@@ -607,74 +691,137 @@ def render_report_html_attachment(report: Report) -> bytes:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{escape(company_name)} - AI原生转型诊断报告</title>
   <style>
-    body {{ margin: 0; background: #eef3f8; color: #18202f; font-family: "Microsoft YaHei", Arial, sans-serif; }}
-    .shell {{ max-width: 1080px; margin: 0 auto; padding: 42px 24px 56px; }}
-    .hero {{ background: linear-gradient(135deg, #0c1f3a, #1a3f60); border-radius: 18px; color: #fff; padding: 52px 56px; }}
-    .hero p {{ color: #b8c7db; margin: 0 0 12px; }}
-    .hero h1 {{ font-size: 36px; line-height: 1.25; margin: 0 0 10px; }}
-    .hero .subtitle {{ color: #e2e8f0; font-size: 20px; margin-bottom: 30px; }}
-    .report-meta {{ border-top: 1px solid rgba(255,255,255,.25); display: grid; grid-template-columns: 1fr 1fr; gap: 18px 36px; margin: 0; padding-top: 24px; }}
-    .report-meta div {{ display: flex; justify-content: space-between; gap: 24px; }}
-    .report-meta dt {{ color: #b8c7db; }}
-    .report-meta dd {{ margin: 0; color: #fff; font-weight: 700; }}
-    .score-strip {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 28px 0; }}
-    .score-card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px 26px; }}
-    .score-card span {{ color: #94a3b8; display: block; font-size: 12px; font-weight: 700; margin-bottom: 8px; }}
-    .score-card strong {{ color: #0f172a; display: block; font-size: 34px; line-height: 1; }}
-    .score-card em {{ color: #94a3b8; font-size: 18px; font-style: normal; }}
-    .chart-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 28px 0; }}
-    .chart-card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 24px 24px 18px; break-inside: avoid; }}
-    .chart-card-header {{ margin-bottom: 10px; }}
-    .card-accent {{ display: block; width: 34px; height: 4px; border-radius: 4px; background: linear-gradient(135deg,#2563eb,#38bdf8); margin-bottom: 10px; }}
-    .radar-accent {{ background: linear-gradient(135deg,#8b5cf6,#6366f1); }}
-    .chart-card h3 {{ color: #0f172a; font-size: 16px; margin: 0 0 4px; }}
-    .chart-card p {{ color: #94a3b8; font-size: 12px; margin: 0; }}
-    .chart-card svg {{ display: block; width: 100%; height: auto; margin-top: 14px; overflow: visible; }}
-    .svg-title {{ fill: #334155; font-size: 14px; font-weight: 700; }}
-    .chart-label, .chart-value {{ fill: #475569; font-size: 11px; }}
+    :root {{ --navy: {REPORT_NAVY}; --red: {REPORT_RED}; --blue: {REPORT_BLUE}; --pale-red: {REPORT_PALE_RED}; --pale-gray: {REPORT_PALE_GRAY}; --rule: {REPORT_RULE_GRAY}; --ink: {REPORT_INK}; --muted: {REPORT_MUTED}; }}
+    * {{ box-sizing: border-box; }}
+    html {{ background: #e9edf2; }}
+    body {{ margin: 0; background: #e9edf2; color: var(--ink); font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; }}
+    .shell {{ width: min(210mm, calc(100% - 32px)); margin: 24px auto; background: #fff; box-shadow: 0 14px 42px rgba(23,54,93,.12); }}
+    .report-cover {{ min-height: 277mm; display: flex; flex-direction: column; padding: 40mm 18mm 17mm; background: #fff; break-after: page; page-break-after: always; }}
+    .cover-company {{ color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: .03em; margin: 0 0 21mm; text-align: center; }}
+    .report-cover h1 {{ color: var(--navy); font-size: {cover_title_size}px; line-height: 1.22; margin: 0; text-align: center; }}
+    .report-cover h1 span {{ display: block; }}
+    .report-cover h1 span + span {{ font-size: 32px; margin-top: 3px; }}
+    .cover-subtitle {{ color: var(--red); font-size: 16px; font-weight: 500; line-height: 1.5; margin: 22px 0 0; text-align: center; }}
+    .cover-rule {{ border-top: 2px solid var(--red); margin: 21mm auto 9mm; width: 162mm; }}
+    .report-meta {{ background: var(--pale-gray); margin: 0 auto; padding: 7px 15px; width: 134mm; }}
+    .report-meta div {{ display: grid; grid-template-columns: 28mm 1fr; gap: 8px; padding: 4px 0; }}
+    .report-meta dt {{ color: #4e5968; font-size: 12px; font-weight: 800; }}
+    .report-meta dd {{ color: var(--ink); font-size: clamp(10px, 1.1vw, 12px); font-weight: 500; margin: 0; white-space: nowrap; }}
+    .cover-footer {{ color: var(--navy); font-size: 11px; font-weight: 700; letter-spacing: .06em; margin: 11mm 0 0; text-align: center; }}
+    .report-overview {{ padding: 11mm 16mm 8mm; }}
+    .overview-title {{ border-left: 4px solid var(--red); color: var(--navy); font-size: 18px; margin: 0 0 10px; padding-left: 11px; }}
+    .score-strip {{ display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--rule); margin: 0 0 8mm; }}
+    .score-card {{ border-right: 1px solid var(--rule); padding: 15px 14px; text-align: center; }}
+    .score-card:last-child {{ background: var(--pale-red); border-right: 0; }}
+    .score-card span {{ color: var(--muted); display: block; font-size: 11px; font-weight: 700; margin-bottom: 7px; }}
+    .score-card strong {{ color: var(--navy); display: block; font-size: 27px; line-height: 1; }}
+    .score-card:last-child strong {{ color: var(--red); }}
+    .chart-grid {{ display: grid; grid-template-columns: 1fr; gap: 8mm; }}
+    .chart-card {{ border-top: 1px solid var(--rule); break-inside: avoid; padding-top: 11px; }}
+    .chart-card-header {{ border-bottom: 1px solid var(--rule); margin-bottom: 8px; padding-bottom: 7px; }}
+    .chart-card h3 {{ color: var(--blue); font-size: 17px; margin: 0 0 4px; }}
+    .chart-card p {{ color: var(--muted); font-size: 11px; margin: 0; }}
+    .chart-card svg {{ display: block; height: auto; margin: 8px auto 0; max-height: 101mm; overflow: visible; width: 100%; }}
+    .svg-title {{ fill: var(--navy); font-size: 14px; font-weight: 700; }}
+    .chart-label, .chart-value {{ fill: #46566d; font-size: 11px; }}
     .chart-value {{ font-weight: 700; }}
-    .bar-bg {{ fill: #e2e8f0; }}
-    .bar-fill {{ fill: #3b82f6; }}
-    .radar-ring {{ fill: none; stroke: #dbe4ef; stroke-width: 1; }}
-    .radar-axis {{ stroke: #dbe4ef; stroke-width: 1; }}
-    .radar-label {{ fill: #475569; font-size: 11px; }}
-    .radar-value {{ fill: rgba(59,130,246,.16); stroke: #3b82f6; stroke-width: 2.5; }}
-    .radar-point {{ fill: #22c55e; stroke: #fff; stroke-width: 2; }}
-    .report-html {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; margin-top: 28px; padding: 38px 46px; page-break-before: always; }}
-    h2 {{ border-top: 1px solid #e2e8f0; color: #0f172a; font-size: 20px; margin: 32px 0 16px; padding-top: 24px; }}
-    h3 {{ color: #1e293b; font-size: 17px; margin: 22px 0 10px; }}
-    p, li {{ color: #475569; font-size: 15px; line-height: 1.85; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    th, td {{ border-bottom: 1px solid #e2e8f0; padding: 12px; text-align: left; }}
-    th {{ color: #334155; background: #f8fafc; }}
-    @media (max-width: 760px) {{
-      .shell {{ padding: 18px; }}
-      .hero {{ padding: 28px 24px; }}
+    .bar-bg {{ fill: #e7ebf0; }}
+    .bar-fill {{ fill: var(--navy); }}
+    .bar-risk {{ fill: var(--red); }}
+    .radar-ring, .radar-axis {{ fill: none; stroke: #cfd7e2; stroke-width: 1; }}
+    .radar-label {{ fill: #46566d; font-size: 11px; }}
+    .radar-value {{ fill: rgba(23,54,93,.13); stroke: var(--navy); stroke-width: 2.5; }}
+    .radar-point {{ fill: var(--navy); stroke: #fff; stroke-width: 2; }}
+    .radar-risk {{ fill: var(--red); }}
+    .report-html {{ background: #fff; padding: 10mm 16mm 15mm; }}
+    .report-executive-summary {{ padding: 0; }}
+    .report-running-header {{ border-bottom: 1px solid var(--red); color: var(--muted); font-size: 10px; line-height: 1.2; margin: 0 0 11mm; padding: 0 0 4px; }}
+    .report-running-footer {{ align-items: center; color: var(--muted); display: grid; font-size: 9px; grid-template-columns: 1fr auto 1fr; margin-top: 11mm; }}
+    .report-running-footer span:nth-child(2) {{ text-align: center; }}
+    .report-html .report-document > header, .report-html .report-document > .report-score {{ display: none; }}
+    .report-html h1 {{ color: var(--navy); font-size: 25px; line-height: 1.35; margin: 0 0 12px; }}
+    .report-html h2 {{ color: var(--navy); font-size: 24px; line-height: 1.35; margin: 25px 0 10px; padding: 0; }}
+    .report-html h2:first-of-type {{ margin-top: 0; }}
+    .report-html h3, .report-html h4 {{ color: var(--blue); break-after: avoid; margin: 18px 0 7px; }}
+    .report-html p, .report-html li {{ color: var(--ink); font-size: 14px; line-height: 1.72; orphans: 3; widows: 3; }}
+    .report-html .report-lead {{ color: var(--red); font-size: 16.67px; font-weight: 700; line-height: 1.55; margin: 0 0 12px; }}
+    .report-html strong {{ color: var(--navy); font-weight: 800; }}
+    .report-html .report-finding-table tbody td:nth-child(2) strong {{ color: var(--red); }}
+    .report-html table {{ border-collapse: collapse; break-inside: auto; font-size: 12px; margin: 14px 0; table-layout: fixed; width: 100%; }}
+    .report-html tr {{ break-inside: avoid; page-break-inside: avoid; }}
+    .report-html th, .report-html td {{ border: 1px solid var(--rule); line-height: 1.5; padding: 7px 9px; text-align: left; vertical-align: middle; }}
+    .report-html thead {{ display: table-header-group; }}
+    .report-html thead th {{ background: var(--navy); color: #fff; font-weight: 800; }}
+    .report-html tbody tr:nth-child(even) {{ background: var(--pale-gray); }}
+    .report-html .report-diagnosis-callout {{ background: var(--pale-red); border-left: 4px solid var(--red); break-inside: avoid; margin: 12px 0; padding: 11px 13px; }}
+    .report-html .report-diagnosis-callout p {{ color: var(--navy); font-weight: 700; margin: 0; }}
+    .report-html .report-priority {{ background: var(--red); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 7px; }}
+    .report-html .report-module-block, .report-html .report-dimension-analysis {{ border: 1px solid var(--rule); break-inside: avoid; margin: 12px 0; padding: 12px; }}
+    .report-html .report-module-head {{ background: var(--navy); color: #fff; font-weight: 800; margin: -12px -12px 10px; padding: 9px 12px; }}
+    @page {{ size: A4; margin: 10mm 0 0; }}
+    @media print {{
+      html, body {{ background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }}
+      .shell {{ box-shadow: none; margin: 0; width: 210mm; }}
+      .report-cover {{ min-height: 287mm; }}
+      .report-overview {{ min-height: 0; }}
+      .report-html {{ padding-bottom: 9mm; padding-top: 7mm; }}
+      .report-running-header {{ margin-bottom: 7mm; }}
+      .report-running-footer {{ margin-top: 6mm; }}
+      .report-html h2 {{ margin-bottom: 6px; margin-top: 12px; }}
+      .report-html p, .report-html li {{ line-height: 1.55; }}
+      .report-html table {{ margin-bottom: 8px; margin-top: 8px; }}
+      .report-html th, .report-html td {{ padding-bottom: 6px; padding-top: 6px; }}
+      .report-body-content h2:nth-of-type(3) {{ break-before: page; page-break-before: always; }}
+    }}
+    @media screen and (max-width: 760px) {{
+      .shell {{ margin: 0; width: 100%; }}
+      .report-cover {{ min-height: 100vh; padding: 72px 24px 30px; }}
+      .report-cover h1 {{ font-size: 28px; }}
+      .report-cover h1 span + span {{ font-size: 26px; }}
+      .cover-rule {{ width: 100%; }}
+      .report-meta {{ width: 100%; }}
+      .report-meta div {{ grid-template-columns: 80px minmax(0, 1fr); }}
+      .report-meta dd {{ overflow-wrap: anywhere; white-space: normal; }}
       .score-strip {{ grid-template-columns: 1fr; }}
-      .chart-grid {{ grid-template-columns: 1fr; }}
-      .report-meta {{ grid-template-columns: 1fr; }}
-      .report-html {{ padding: 26px 22px; }}
+      .score-card {{ border-bottom: 1px solid var(--rule); border-right: 0; }}
+      .report-overview, .report-html {{ min-height: 0; padding: 34px 22px; }}
+      .report-html h2 {{ break-before: auto; }}
     }}
   </style>
 </head>
 <body>
-  <main class="shell">
-    <section class="hero">
-      <p>AI 原生企业转型诊断报告</p>
-      <h1>{escape(company_name)}</h1>
-      <p class="subtitle">AI 原生转型诊断报告</p>
+  <main class="shell" data-report-date-iso="{escape(report_date_iso)}">
+    <section class="report-cover">
+      <p class="cover-company">{escape(company_name)}</p>
+      <h1><span>{escape(short_company_name)} AI 原生转型</span><span>诊断报告</span></h1>
+      <p class="cover-subtitle">从诊断共识走向可执行的 AI 转型路径</p>
+      <div class="cover-rule"></div>
       <dl class="report-meta">
+        <div><dt>评估对象</dt><dd>{escape(company_name)}</dd></div>
+        <div><dt>报告类型</dt><dd>AI 原生企业转型诊断报告</dd></div>
+        <div><dt>评估范围</dt><dd>企业 AI 原生能力成熟度与转型路径</dd></div>
         <div><dt>报告编号</dt><dd>{escape(report_number)}</dd></div>
-        <div><dt>报告日期</dt><dd>{escape(report_date)}</dd></div>
+        <div><dt>出具日期</dt><dd>{escape(report_date)}</dd></div>
       </dl>
+      <p class="cover-footer">让 AI 从局部工具走向企业级生产力</p>
     </section>
-    <section class="score-strip">
-      <div class="score-card"><span>诊断总分</span><strong>{escape(str(score.get("total", "-")))}</strong></div>
-      <div class="score-card"><span>满分</span><strong>{escape(str(score.get("max_score", "-")))}</strong></div>
-      <div class="score-card"><span>综合得分率</span><strong>{escape(score_rate_text)}</strong></div>
+    <section class="report-overview">
+      <h2 class="overview-title">诊断结果概览</h2>
+      <section class="score-strip" aria-label="诊断评分">
+        <div class="score-card"><span>诊断总分</span><strong>{escape(str(score.get("total", "-")))}</strong></div>
+        <div class="score-card"><span>满分</span><strong>{escape(str(score.get("max_score", "-")))}</strong></div>
+        <div class="score-card"><span>综合得分率</span><strong>{escape(score_rate_text)}</strong></div>
+      </section>
+      <section class="report-html report-executive-summary" aria-label="执行摘要">{executive_summary_html}</section>
+      {charts}
     </section>
-    {charts}
-    <article class="report-html">{sanitize_report_content(report.html_content)}</article>
+    <article class="report-html" data-body-style="{CUSTOMER_BODY_OVERRIDE}">
+      <div class="report-running-header">AI 原生转型诊断报告</div>
+      <div class="report-body-content">{body_html}</div>
+      <footer class="report-running-footer">
+        <span>企业 AI 转型诊断 | {escape(report_date)}</span><span>报告正文</span><span></span>
+      </footer>
+    </article>
   </main>
 </body>
 </html>"""

@@ -21,6 +21,26 @@ All backend changes must follow `backend/ARCHITECTURE.md`.
 - This repository uses the singular directory name `service/`; do not introduce a parallel `services/` directory.
 - Prefer small domain modules over adding unrelated classes to an existing large file.
 
+## Project operating notes
+
+- `AGENTS.md` is the single authoritative agent-maintenance document for this
+  Windows-compatible repository; do not create a parallel `agent.md`/`AGENT.md`.
+- Customer report presentation is shared across public/admin HTML, standalone
+  customer Word, internal customer-detail Word part three and the email PDF
+  source. Preserve five numbered chapters and the snapshotted report content.
+- Customer email PDF must come from the customer DOCX. Windows local development
+  may use an installed desktop converter; Ubuntu/Docker delivery uses
+  LibreOffice. Never silently attach a different Chromium report layout.
+- Administrator AI-report regeneration is content-only. PDF generation and email
+  delivery require a separate explicit action.
+- Content-only regeneration uses a conservative stale timeout plus a persisted
+  generation-start lease fence: crashed attempts can be retriggered, while late
+  tasks from an older process cannot overwrite a newer reservation.
+- When an implementation changes an important architecture boundary, delivery
+  safety rule, deployment dependency, authoritative output contract or operator
+  recovery path, update this section in the same coordinated issue. Do not add
+  temporary debugging facts, customer data, secrets or one-off task history.
+
 ## Multi-agent coordination
 
 This repository uses a turn-based, single-writer protocol. The complete protocol is

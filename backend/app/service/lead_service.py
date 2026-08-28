@@ -5,16 +5,19 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db import SessionLocal
 from app.models.export_batch import ExportBatch, ExportBatchLead
 from app.models.lead import CompanyLead
 from app.models.report import (
     CompanyResearchStatus,
+    Report,
+    ReportDeliveryJob,
     ReportDeliveryStatus,
     ReportFileStatus,
     ReportStatus,
@@ -25,15 +28,24 @@ from app.repositories.consult_repo import delete_lead_cascade, list_leads
 from app.repositories.qr_code_repo import get_channel_by_code
 from app.schemas.lead import ExportBatchResponse, LeadResponse
 from app.service.api_gateway_service import effective_search_config
-from app.service.company_research import research_company
+from app.service.company_research import research_company, validate_structured_research
 from app.service.lead_export_service import generate_lead_export_docx
 from app.service.lead_status import sync_lead_processing_status
-from app.service.report_content import sanitize_report_content
+from app.service.report_content import build_report_presentation_html
 from app.service.report_queue import enqueue_report_delivery
+from app.service.reporting import (
+    apply_report_candidate,
+    generate_report_candidate,
+    report_generation_semaphore,
+)
 from app.utils.logging_utils import write_operation_log
 from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
+
+REPORT_REGENERATION_STALE_TIMEOUT = timedelta(
+    minutes=max(15.0, get_settings().deepseek_timeout_seconds * 10 / 60)
+)
 
 # 三维状态的中文标签（CSV 导出与批次摘要使用）。
 VIEW_STATUS_LABELS = {"unviewed": "尚未查看", "viewed": "已经查看"}
@@ -64,6 +76,10 @@ class LeadValidationError(LeadServiceError):
     pass
 
 
+class LeadConflictError(LeadServiceError):
+    pass
+
+
 @dataclass(frozen=True)
 class DiagnosticEmailResult:
     message: str
@@ -89,6 +105,16 @@ class ResumeDeliveryResult:
     message: str
     should_process_queue: bool
     report_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ReportRegenerationResult:
+    status: str
+    message: str
+    report_id: int
+    user_id: int
+    previous_status: str
+    generation_started_at: datetime
 
 
 def elapsed_seconds(started_at: datetime | None, completed_at: datetime | None) -> int | None:
@@ -443,7 +469,7 @@ def get_lead_detail(db: Session, lead_id: int, user: User | None = None) -> dict
             "pdf_started_at": report.pdf_started_at,
             "pdf_completed_at": report.pdf_completed_at,
             "pdf_elapsed_seconds": elapsed_seconds(report.pdf_started_at, report.pdf_completed_at),
-            "html_content": sanitize_report_content(report.html_content),
+            "html_content": build_report_presentation_html(report.html_content, report.summary_json),
             "summary": json.loads(report.summary_json or "{}"),
             "company_research": json.loads(report.company_research_json) if report.company_research_json else None,
             "generation_error": report.generation_error,
@@ -577,3 +603,268 @@ def resume_report_delivery(db: Session, user: User, lead_id: int) -> ResumeDeliv
     sync_lead_processing_status(db, lead.id)
     db.commit()
     return ResumeDeliveryResult("已重新入队，将从已有企业情报继续生成 AI 报告并发送", True, report.id)
+
+
+def retry_report_attachment_delivery(
+    db: Session,
+    user: User,
+    lead_id: int,
+) -> ResumeDeliveryResult:
+    """Rebuild the approved customer attachment and send it, without AI work."""
+
+    lead = lead_repo.get_lead_by_id(db, lead_id)
+    if not lead:
+        raise LeadNotFoundError("Lead not found")
+    submission = lead_repo.latest_submission_for_lead(db, lead.id)
+    report = submission.report if submission else None
+    if not report:
+        raise LeadReportNotFoundError("该线索还没有诊断报告，暂无法生成附件")
+    if report.status not in (ReportStatus.generated.value, ReportStatus.fallback.value) or not report.html_content:
+        raise LeadValidationError("AI 报告正文尚未生成完成，请先完成报告内容审核")
+    delivery = lead_repo.latest_delivery_for_report(db, report.id)
+    if delivery and delivery.status == ReportDeliveryStatus.sent.value:
+        raise LeadConflictError("报告已成功发送给客户，为避免重复投递已阻止本次操作")
+    if delivery and delivery.status in (
+        ReportDeliveryStatus.queued.value,
+        ReportDeliveryStatus.processing.value,
+    ):
+        raise LeadConflictError("附件投递任务已在处理中，请勿重复操作")
+    if delivery:
+        delivery.status = ReportDeliveryStatus.queued.value
+        delivery.attempts = 0
+        delivery.last_error = None
+        delivery.run_after = utc_now()
+        delivery.locked_at = None
+        delivery.lock_token = None
+    else:
+        recipient = (lead.email or "").strip()
+        if not recipient:
+            raise LeadValidationError("客户邮箱为空，无法发送附件，请先更正诊断邮箱")
+        delivery = enqueue_report_delivery(db, report, recipient)
+    report.pdf_status = ReportFileStatus.pending.value
+    report.pdf_started_at = None
+    report.pdf_completed_at = None
+    write_operation_log(
+        db,
+        user,
+        "retry_report_attachment_delivery",
+        "lead",
+        str(lead.id),
+        {"report_id": report.id, "delivery_id": delivery.id},
+    )
+    sync_lead_processing_status(db, lead.id)
+    db.commit()
+    return ResumeDeliveryResult("已重新加入附件生成队列；系统将仅重建 PDF 附件并发送，不重新生成 AI 正文", True, report.id)
+
+
+def _validated_persisted_research(report: Report) -> dict:
+    if not report.company_research_json:
+        raise LeadValidationError("企业情报尚未生成，无法重新生成 AI 报告")
+    try:
+        research = json.loads(report.company_research_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise LeadValidationError("已保存的企业情报格式无效，请先重新检索企业信息") from exc
+    if not isinstance(research, dict) or research.get("evidence_version") != 1:
+        raise LeadValidationError("已保存的企业情报不是可复用的证据快照，请先重新检索企业信息")
+    if errors := validate_structured_research(research):
+        raise LeadValidationError(f"已保存的企业情报未通过校验：{errors[0]}")
+    return research
+
+
+def _active_delivery_exists(db: Session, report_id: int) -> bool:
+    return db.query(ReportDeliveryJob.id).filter(
+        ReportDeliveryJob.report_id == report_id,
+        ReportDeliveryJob.status.in_((
+            ReportDeliveryStatus.queued.value,
+            ReportDeliveryStatus.processing.value,
+        )),
+    ).first() is not None
+
+
+def _safe_previous_report_status(value: object) -> str:
+    status = str(value or "")
+    if status in (ReportStatus.generated.value, ReportStatus.fallback.value):
+        return status
+    return ReportStatus.generated.value
+
+
+def _audit_generation_started_at(detail: dict, created_at: datetime) -> datetime:
+    value = detail.get("generation_started_at")
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return (
+                parsed.replace(tzinfo=None)
+                if parsed.tzinfo is None
+                else parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            )
+        except ValueError:
+            pass
+    return created_at
+
+
+def _regeneration_lease_matches(report: Report, generation_started_at: datetime) -> bool:
+    return (
+        report.status == ReportStatus.generating.value
+        and report.generation_started_at == generation_started_at
+    )
+
+
+def trigger_report_regeneration(
+    db: Session,
+    user: User,
+    lead_id: int,
+) -> ReportRegenerationResult:
+    """Reserve a report for content-only regeneration without delivery side effects."""
+
+    lead = lead_repo.get_lead_by_id(db, lead_id)
+    if not lead:
+        raise LeadNotFoundError("Lead not found")
+    submission = lead_repo.latest_submission_for_lead(db, lead.id)
+    current_report = submission.report if submission else None
+    if not current_report:
+        raise LeadReportNotFoundError("该线索还没有诊断报告，无法重新生成")
+
+    report = db.query(Report).filter(Report.id == current_report.id).with_for_update().one()
+    now = utc_now().replace(microsecond=0)
+    recovered_audit: tuple[dict, datetime] | None = None
+    was_stale_recovery = report.status == ReportStatus.generating.value
+    if report.status == ReportStatus.generating.value:
+        recovered_audit = lead_repo.latest_report_regeneration_audit(
+            db,
+            lead_id=lead.id,
+            report_id=report.id,
+        )
+        audit_detail, audit_created_at = recovered_audit or ({}, now)
+        lease_started_at = report.generation_started_at or _audit_generation_started_at(
+            audit_detail,
+            audit_created_at,
+        )
+        if now - lease_started_at < REPORT_REGENERATION_STALE_TIMEOUT:
+            raise LeadConflictError("AI 报告正在生成中，请勿重复操作")
+        previous_status = _safe_previous_report_status(audit_detail.get("previous_status"))
+    else:
+        previous_status = _safe_previous_report_status(report.status)
+
+    if previous_status not in (ReportStatus.generated.value, ReportStatus.fallback.value) or not report.html_content:
+        raise LeadValidationError("当前没有可保留的完整 AI 报告，无法安全重新生成")
+    _validated_persisted_research(report)
+    if _active_delivery_exists(db, report.id):
+        raise LeadConflictError("报告投递任务正在排队或处理中，请等待投递结束后再重新生成")
+
+    if was_stale_recovery:
+        write_operation_log(
+            db,
+            user,
+            "recover_stale_report_regeneration",
+            "lead",
+            str(lead.id),
+            {
+                "report_id": report.id,
+                "restored_status": previous_status,
+                "stale_generation_started_at": (
+                    report.generation_started_at.isoformat()
+                    if report.generation_started_at
+                    else None
+                ),
+            },
+        )
+    report.status = ReportStatus.generating.value
+    report.generation_started_at = now
+    report.generation_completed_at = None
+    write_operation_log(
+        db,
+        user,
+        "trigger_report_regeneration",
+        "lead",
+        str(lead.id),
+        {
+            "report_id": report.id,
+            "previous_status": previous_status,
+            "generation_started_at": now.isoformat(),
+        },
+    )
+    db.commit()
+    return ReportRegenerationResult(
+        status="started",
+        message="已开始重新生成 AI 报告；完成前不会修改原报告，也不会生成 PDF 或发送邮件",
+        report_id=report.id,
+        user_id=user.id,
+        previous_status=previous_status,
+        generation_started_at=now,
+    )
+
+
+def _bounded_regeneration_error(exc: Exception, limit: int = 500) -> str:
+    detail = getattr(exc, "detail", None) or str(exc) or "未知错误"
+    message = f"AI 报告重新生成失败，原报告已保留：{detail}".strip()
+    return message if len(message) <= limit else f"{message[: limit - 1]}…"
+
+
+async def run_report_regeneration_task(
+    report_id: int,
+    user_id: int,
+    previous_status: str = ReportStatus.generated.value,
+    generation_started_at: datetime | None = None,
+) -> None:
+    """Build a candidate, then replace the report in one transaction on validated success."""
+
+    db = SessionLocal()
+    try:
+        report = lead_repo.get_report_by_id(db, report_id)
+        if (
+            not report
+            or generation_started_at is None
+            or not _regeneration_lease_matches(report, generation_started_at)
+        ):
+            return
+        async with report_generation_semaphore():
+            candidate = await generate_report_candidate(db, report)
+
+        db.rollback()
+        report = db.query(Report).filter(Report.id == report_id).with_for_update().one()
+        if not _regeneration_lease_matches(report, generation_started_at):
+            db.rollback()
+            return
+        if _active_delivery_exists(db, report.id):
+            raise LeadValidationError("生成期间出现新的投递任务，已取消替换")
+
+        apply_report_candidate(db, report, candidate)
+        report.pdf_status = ReportFileStatus.pending.value
+        report.pdf_started_at = None
+        report.pdf_completed_at = None
+        report.pdf_path = None
+        user = db.get(User, user_id)
+        write_operation_log(
+            db,
+            user,
+            "regenerate_ai_report",
+            "lead",
+            str(report.submission.lead_id),
+            {"report_id": report.id, "status": "succeeded"},
+        )
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("AI 报告重新生成失败 report_id=%s", report_id)
+        db.rollback()
+        report = db.query(Report).filter(Report.id == report_id).with_for_update().first()
+        if (
+            report
+            and generation_started_at is not None
+            and _regeneration_lease_matches(report, generation_started_at)
+        ):
+            report.status = _safe_previous_report_status(previous_status)
+            report.generation_completed_at = utc_now()
+            report.generation_error = _bounded_regeneration_error(exc)
+            user = db.get(User, user_id)
+            write_operation_log(
+                db,
+                user,
+                "regenerate_ai_report",
+                "lead",
+                str(report.submission.lead_id),
+                {"report_id": report.id, "status": "failed"},
+            )
+            db.commit()
+    finally:
+        db.close()

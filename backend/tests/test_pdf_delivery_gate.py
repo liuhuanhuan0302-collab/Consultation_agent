@@ -1,4 +1,5 @@
 import json
+import asyncio
 import pytest
 from datetime import datetime
 from pathlib import Path
@@ -7,14 +8,20 @@ from urllib.request import url2pathname
 from urllib.parse import urlparse
 
 from app.config import Settings
-from app.models import Report
-from app.service import pdf_service
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.database import Base
+from app.models import CompanyLead, DiagnosisSubmission, Report, ReportDeliveryJob
+from app.service import pdf_service, report_queue
 from app.service.pdf_service import (
+    CustomerPdfConversionError,
     ReportPdfValidationError,
     customer_report_filename,
     validate_report_html,
     validate_report_pdf_bytes,
 )
+from app.utils.time_utils import utc_now
 
 
 def test_report_html_must_contain_every_customer_section():
@@ -156,3 +163,150 @@ def test_sandbox_failure_error_hints_no_sandbox_flag(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="PDF_BROWSER_NO_SANDBOX"):
         pdf_service.render_report_pdf_bytes_with_browser(report)
+
+
+def test_conversion_exhaustion_reaches_manual_state_and_never_sends_email(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = Session(engine)
+    lead = CompanyLead(company_name="Example", email="customer@example.com")
+    db.add(lead)
+    db.flush()
+    submission = DiagnosisSubmission(lead_id=lead.id)
+    db.add(submission)
+    db.flush()
+    report = Report(
+        submission_id=submission.id,
+        title="Example AI 原生转型诊断报告",
+        html_content="<article><h2>一、执行摘要</h2></article>",
+        summary_json='{"score":{"total":1,"max_score":2,"score_rate":0.5}}',
+        status="generated",
+    )
+    db.add(report)
+    db.flush()
+    job = ReportDeliveryJob(
+        lead_id=lead.id,
+        submission_id=submission.id,
+        report_id=report.id,
+        recipient_email="customer@example.com",
+        status="processing",
+        attempts=1,
+        max_attempts=3,
+        locked_at=utc_now(),
+        lock_token="owned-lease-token",
+        run_after=utc_now(),
+    )
+    db.add(job)
+    db.commit()
+    sent = {"count": 0}
+    monkeypatch.setattr(report_queue, "SessionLocal", lambda: Session(engine))
+
+    async def fail_pdf(_report):
+        raise CustomerPdfConversionError("Word→PDF 客户附件转换连续失败 3 次，已转人工处理")
+
+    monkeypatch.setattr(report_queue, "render_report_pdf_bytes", fail_pdf)
+    monkeypatch.setattr(
+        report_queue,
+        "send_report_pdf_email",
+        lambda *_args, **_kwargs: sent.__setitem__("count", sent["count"] + 1),
+    )
+
+    assert asyncio.run(report_queue.process_report_delivery_job(job.id)) is False
+
+    verify = Session(engine)
+    persisted_report = verify.get(Report, report.id)
+    persisted_job = verify.get(ReportDeliveryJob, job.id)
+    assert persisted_report.pdf_status == "failed"
+    assert persisted_job.status == "failed"
+    assert "未发送邮件" in persisted_job.last_error
+    assert "重新生成附件并发送" in persisted_job.last_error
+    assert sent["count"] == 0
+    verify.close()
+    db.close()
+    engine.dispose()
+
+
+def test_fallback_attachment_delivery_skips_research_and_ai_and_preserves_content(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = Session(engine)
+    lead = CompanyLead(company_name="Example", email="customer@example.com")
+    db.add(lead)
+    db.flush()
+    submission = DiagnosisSubmission(lead_id=lead.id)
+    db.add(submission)
+    db.flush()
+    original_html = "<article><h2>一、执行摘要</h2><p>已审核正文</p></article>"
+    original_summary = '{"approved":true,"report_format_version":2}'
+    original_research = '{"evidence_version":1,"approved":true}'
+    report = Report(
+        submission_id=submission.id,
+        title="Example AI 原生转型诊断报告",
+        html_content=original_html,
+        summary_json=original_summary,
+        company_research_json=original_research,
+        status="fallback",
+        model_vendor="approved-vendor",
+        model_name="approved-model",
+        generation_error="historical fallback marker",
+    )
+    db.add(report)
+    db.flush()
+    job = ReportDeliveryJob(
+        lead_id=lead.id,
+        submission_id=submission.id,
+        report_id=report.id,
+        recipient_email="customer@example.com",
+        status="processing",
+        attempts=1,
+        max_attempts=3,
+        locked_at=utc_now(),
+        lock_token="owned-fallback-lease",
+        run_after=utc_now(),
+    )
+    db.add(job)
+    db.commit()
+
+    calls = {"research": 0, "generation": 0, "pdf": 0, "email": 0}
+    monkeypatch.setattr(report_queue, "SessionLocal", lambda: Session(engine))
+
+    async def forbidden_research(*_args, **_kwargs):
+        calls["research"] += 1
+        raise AssertionError("attachment-only delivery must not research")
+
+    async def forbidden_generation(*_args, **_kwargs):
+        calls["generation"] += 1
+        raise AssertionError("attachment-only delivery must not regenerate AI content")
+
+    async def fake_pdf(rendered_report):
+        calls["pdf"] += 1
+        assert rendered_report.status == "fallback"
+        assert rendered_report.html_content == original_html
+        return b"%PDF-1.7 mocked attachment"
+
+    def fake_email(*_args, **_kwargs):
+        calls["email"] += 1
+
+    monkeypatch.setattr(report_queue, "research_company", forbidden_research)
+    monkeypatch.setattr(report_queue, "generate_report_content", forbidden_generation)
+    monkeypatch.setattr(report_queue, "render_report_pdf_bytes", fake_pdf)
+    monkeypatch.setattr(report_queue, "send_report_pdf_email", fake_email)
+
+    assert asyncio.run(report_queue.process_report_delivery_job(job.id)) is True
+
+    verify = Session(engine)
+    persisted_report = verify.get(Report, report.id)
+    persisted_job = verify.get(ReportDeliveryJob, job.id)
+    assert calls == {"research": 0, "generation": 0, "pdf": 1, "email": 1}
+    assert persisted_report.status == "fallback"
+    assert persisted_report.html_content == original_html
+    assert persisted_report.summary_json == original_summary
+    assert persisted_report.company_research_json == original_research
+    assert persisted_report.model_vendor == "approved-vendor"
+    assert persisted_report.model_name == "approved-model"
+    assert persisted_report.generation_error == "historical fallback marker"
+    assert persisted_report.pdf_status == "generated"
+    assert persisted_job.status == "sent"
+    verify.close()
+    db.close()
+    engine.dispose()

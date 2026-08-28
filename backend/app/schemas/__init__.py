@@ -34,6 +34,7 @@ from app.schemas.questionnaire import (
     SubmitQuestionnaireRequest,
 )
 from app.schemas.report import AiMessageRead, ReportEmailRequest, ReportRead, SubmitResponse
+from app.schemas.system_setting import ReportContactSettingsRead, ReportContactSettingsUpdate
 
 __all__ = [
     "AiMessageRead",
@@ -64,6 +65,8 @@ __all__ = [
     "QuestionUpsert",
     "ReportEmailRequest",
     "ReportRead",
+    "ReportContactSettingsRead",
+    "ReportContactSettingsUpdate",
     "ScoreResponse",
     "SearchConfigUpdate",
     "SearchTestRequest",

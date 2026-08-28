@@ -58,17 +58,11 @@ function shortName(name: string): string {
 }
 
 function rateColor(rate: number): string {
-  if (rate < 0.25) return "#ef4444";
-  if (rate < 0.5) return "#f59e0b";
-  if (rate < 0.75) return "#3b82f6";
-  return "#22c55e";
+  return rate < 0.5 ? "#c00000" : "#17365d";
 }
 
 function rateBg(rate: number): string {
-  if (rate < 0.25) return "rgba(239,68,68,0.20)";
-  if (rate < 0.5) return "rgba(245,158,11,0.20)";
-  if (rate < 0.75) return "rgba(59,130,246,0.18)";
-  return "rgba(34,197,94,0.18)";
+  return rate < 0.5 ? "rgba(192,0,0,0.10)" : "rgba(23,54,93,0.12)";
 }
 
 function rateLabel(rate: number): string {
@@ -91,7 +85,7 @@ const barData = computed(() => ({
       backgroundColor: sorted.value.map((d) => rateBg(d.score_rate)),
       borderColor: sorted.value.map((d) => rateColor(d.score_rate)),
       borderWidth: 1.5,
-      borderRadius: 4,
+      borderRadius: 0,
       barPercentage: 0.7,
     },
   ],
@@ -105,11 +99,11 @@ const barOptions = {
   plugins: {
     legend: { display: false },
     tooltip: {
-      backgroundColor: "rgba(15,23,42,0.92)",
+      backgroundColor: "rgba(23,54,93,0.96)",
       titleFont: { size: 13 },
       bodyFont: { size: 12 },
       padding: 10,
-      cornerRadius: 6,
+      cornerRadius: 0,
       callbacks: {
         title: (ctx: TooltipItem<"bar">[]) => {
           const idx = ctx[0]?.dataIndex;
@@ -131,15 +125,15 @@ const barOptions = {
       ticks: {
         callback: (v: string | number) => `${v}%`,
         font: { size: 11 },
-        color: "#94a3b8",
+        color: "#666666",
       },
-      grid: { color: "#f1f5f9" },
+      grid: { color: "#d9e2f3" },
     },
     y: {
       grid: { display: false },
       ticks: {
         font: { size: 12, weight: 500 },
-        color: "#475569",
+        color: "#666666",
       },
     },
   },
@@ -151,8 +145,8 @@ const radarData = computed(() => ({
     {
       label: "得分率",
       data: orderedDimensions.value.map((d) => Math.round(d.score_rate * 100)),
-      backgroundColor: "rgba(59,130,246,0.15)",
-      borderColor: "#3b82f6",
+      backgroundColor: "rgba(23,54,93,0.13)",
+      borderColor: "#17365d",
       borderWidth: 2.5,
       pointBackgroundColor: orderedDimensions.value.map((d) => rateColor(d.score_rate)),
       pointBorderColor: "#ffffff",
@@ -171,11 +165,11 @@ const radarOptions = {
   plugins: {
     legend: { display: false },
     tooltip: {
-      backgroundColor: "rgba(15,23,42,0.92)",
+      backgroundColor: "rgba(23,54,93,0.96)",
       titleFont: { size: 13 },
       bodyFont: { size: 12 },
       padding: 10,
-      cornerRadius: 6,
+      cornerRadius: 0,
       callbacks: {
         title: () => "",
         label: (ctx: TooltipItem<"radar">) => {
@@ -196,14 +190,14 @@ const radarOptions = {
         stepSize: 20,
         backdropColor: "transparent",
         font: { size: 10 },
-        color: "#94a3b8",
+        color: "#666666",
       },
       pointLabels: {
         font: { size: 12, weight: 500 },
-        color: "#475569",
+        color: "#666666",
       },
-      grid: { color: "#e2e8f0" },
-      angleLines: { color: "#e2e8f0" },
+      grid: { color: "#d9e2f3" },
+      angleLines: { color: "#d9e2f3" },
     },
   },
 };
@@ -214,7 +208,6 @@ const radarOptions = {
   <div class="chart-grid" v-show="dimensions.length">
     <div class="chart-card chart-card--bar">
       <div class="chart-card-header">
-        <span class="card-accent"></span>
         <h3>能力成熟度排行</h3>
         <p class="chart-card-sub">当前启用维度的得分率从低到高排列，快速定位薄弱环节</p>
       </div>
@@ -224,7 +217,6 @@ const radarOptions = {
     </div>
     <div class="chart-card chart-card--radar">
       <div class="chart-card-header">
-        <span class="card-accent" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)"></span>
         <h3>AI 转型能力雷达图</h3>
         <p class="chart-card-sub">按当前启用维度生成，面积越大代表能力越均衡</p>
       </div>
@@ -238,50 +230,56 @@ const radarOptions = {
 <style scoped>
 .chart-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
   margin: 24px 0;
+  min-width: 0;
+  width: 100%;
 }
 
 .chart-card {
   background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 14px;
-  padding: 24px 24px 18px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid #d9e2f3;
+  border-top: 1px solid #d9e2f3;
+  border-radius: 0;
+  box-shadow: none;
+  min-width: 0;
+  padding: 22px 22px 16px;
 }
 
 .chart-card-header {
+  border-bottom: 1px solid #d9e2f3;
   margin-bottom: 10px;
-}
-
-.card-accent {
-  display: block;
-  width: 32px;
-  height: 4px;
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
-  border-radius: 2px;
-  margin-bottom: 14px;
+  min-width: 0;
+  padding-bottom: 9px;
 }
 
 .chart-card h3 {
   font-size: 16px;
   font-weight: 700;
-  color: #0f172a;
+  color: #2f5597;
   margin: 0 0 4px;
   letter-spacing: -0.01em;
 }
 
 .chart-card-sub {
   font-size: 12px;
-  color: #94a3b8;
+  color: #666666;
   margin: 0;
 }
 
 .chart-wrapper {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   position: relative;
   width: 100%;
   height: 370px;
+}
+
+.chart-wrapper canvas {
+  display: block;
+  max-width: 100% !important;
 }
 
 @media (max-width: 820px) {

@@ -46,7 +46,7 @@ from app.schemas import (
 from app.service import submission_service
 from app.service.report_queue import process_job_then_next
 from app.service.reporting import regenerate_report_content_for_testing
-from app.service.report_content import sanitize_report_content
+from app.service.report_content import build_report_presentation_html
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
 from app.utils.request import client_ip
@@ -100,7 +100,7 @@ def serialize_public_report(report: Report) -> dict:
         "public_token": report.public_token,
         "status": report.status,
         "title": report.title,
-        "html_content": sanitize_report_content(report.html_content),
+        "html_content": build_report_presentation_html(report.html_content, report.summary_json),
         "created_at": report.created_at,
         "score": summary.get("score"),
         "dimensions": summary.get("dimensions", []),
@@ -357,7 +357,10 @@ async def submit_questionnaire(
             "public_token": report.public_token,
             "status": report.status,
             "title": report.title,
-            "html_content": sanitize_report_content(report.html_content),
+            "html_content": build_report_presentation_html(
+                report.html_content,
+                getattr(report, "summary_json", None),
+            ),
             "model_vendor": report.model_vendor,
             "model_name": report.model_name,
             "created_at": report.created_at,
