@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -25,6 +25,22 @@ class ReportDeliveryStatus(str, Enum):
     processing = "processing"
     sent = "sent"
     failed = "failed"
+    cancelled = "cancelled"
+
+
+class ReportQueueState(str, Enum):
+    active = "active"
+    automatic_waiting = "automatic_waiting"
+    manual_review = "manual_review"
+    approved_waiting = "approved_waiting"
+
+
+class ReportTaskKind(str, Enum):
+    full_delivery = "full_delivery"
+    research_only = "research_only"
+    content_regeneration = "content_regeneration"
+    attachment_delivery = "attachment_delivery"
+    pdf_export = "pdf_export"
 
 
 class CompanyResearchStatus(str, Enum):
@@ -69,6 +85,9 @@ class Report(Base):
     model_name: Mapped[str | None] = mapped_column(String(120))
     generation_error: Mapped[str | None] = mapped_column(Text)
     pdf_path: Mapped[str | None] = mapped_column(String(500))
+    customer_pdf_bytes: Mapped[bytes | None] = mapped_column(
+        LargeBinary(length=16 * 1024 * 1024)
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
@@ -108,6 +127,14 @@ class ReportDeliveryJob(Base):
         default=ReportDeliveryStatus.queued.value,
         index=True,
     )
+    queue_state: Mapped[ReportQueueState | None] = mapped_column(String(32), index=True)
+    task_kind: Mapped[ReportTaskKind] = mapped_column(
+        String(32), default=ReportTaskKind.full_delivery.value, index=True
+    )
+    task_context_json: Mapped[str | None] = mapped_column(Text)
+    processing_stage: Mapped[str | None] = mapped_column(String(64))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    approved_by: Mapped[str | None] = mapped_column(String(120))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     last_error: Mapped[str | None] = mapped_column(Text)

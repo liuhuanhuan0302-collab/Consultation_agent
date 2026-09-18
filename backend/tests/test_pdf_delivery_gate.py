@@ -286,6 +286,7 @@ def test_fallback_attachment_delivery_skips_research_and_ai_and_preserves_conten
 
     def fake_email(*_args, **_kwargs):
         calls["email"] += 1
+        assert _args[2] == b"%PDF-1.7 mocked attachment"
 
     monkeypatch.setattr(report_queue, "research_company", forbidden_research)
     monkeypatch.setattr(report_queue, "generate_report_content", forbidden_generation)
@@ -306,6 +307,7 @@ def test_fallback_attachment_delivery_skips_research_and_ai_and_preserves_conten
     assert persisted_report.model_name == "approved-model"
     assert persisted_report.generation_error == "historical fallback marker"
     assert persisted_report.pdf_status == "generated"
+    assert persisted_report.customer_pdf_bytes == b"%PDF-1.7 mocked attachment"
     assert persisted_job.status == "sent"
     verify.close()
     db.close()

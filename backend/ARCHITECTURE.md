@@ -16,6 +16,7 @@ backend/app/
 │           ├── auth.py         # Login / logout / me / change-password
 │           ├── users.py        # User management
 │           ├── leads.py        # Lead list/detail/export/email/delete/research
+│           ├── organization.py # Read-only organization diagnosis admin views/export
 │           ├── questions.py    # Question modules and questions
 │           ├── cases.py        # Case studies
 │           ├── channels.py     # Channels
@@ -59,6 +60,7 @@ Simple read-only CRUD endpoints may call a repository directly when adding a ser
 |---|---|---|---|
 | Users and roles | `models/user.py` | `schemas/auth.py` | `repositories/user_repo.py` |
 | Customer leads | `models/lead.py` | `schemas/lead.py` | `repositories/lead_repo.py`, `service/lead_service.py`, `service/lead_export_service.py` |
+| Organization diagnosis | `models/organization.py` | `schemas/organization.py`, `schemas/organization_admin.py` | `repositories/organization_repo.py`, `repositories/organization_admin_repo.py`, `service/organization_service.py`, `service/organization_admin_service.py` |
 | Questionnaires and scoring | `models/questionnaire.py` | `schemas/questionnaire.py` | `repositories/questionnaire_repo.py`, `repositories/submission_repo.py`, `service/scoring.py`, `service/diagnosis.py`, `service/submission_service.py` |
 | Company research evidence | (stored on `Report`) | `schemas/report.py` | `service/company_research.py` |
 | Reports and delivery | `models/report.py` | `schemas/report.py` | `service/reporting.py`, `service/report_analysis.py`, `service/report_content.py`, `service/report_queue.py`, `service/pdf_service.py`, `service/email_service.py` |
@@ -72,19 +74,20 @@ Simple read-only CRUD endpoints may call a repository directly when adding a ser
 
 ### Questionnaire submission
 
-The endpoint owns session ownership, HTTP mapping, response construction, and
-scheduling the post-commit background task. Business orchestration and the
-transaction boundary live in the submission service.
+The endpoint owns session ownership, HTTP mapping and response construction.
+Business orchestration and the transaction boundary live in the submission
+service; Web processes only persist queue work and never execute the pipeline.
 
 ```text
 public.py: submit_questionnaire (HTTP mapping, X-Session-Token ownership, rate limit)
   → service/submission_service.py: submit_questionnaire
       row-lock read (FOR UPDATE) → answer completeness validation
-      → pending-job capacity check → answer persistence → rule-engine scoring
-      → get-or-create pending report → enqueue delivery job → commit
+      → answer persistence → rule-engine scoring
+      → get-or-create pending report → atomically place persistent job into
+        active / automatic_waiting / manual_review → commit
       (MySQL deadlock 1205/1213 auto-retried up to 3 times)
-  → background task process_job_then_next
-  → service/report_queue.py: process_report_delivery_job
+  → independent scripts/report_worker.py process (the sole executor)
+  → service/report_queue.py: dynamic supervisor + process_report_delivery_job
       → company_research.research_company (fail-closed, see below)
       → reporting.generate_report_content (semaphore-limited, structured template
         validated with up to 3 correction attempts; captures report format version
@@ -95,14 +98,15 @@ public.py: submit_questionnaire (HTTP mapping, X-Session-Token ownership, rate l
 ```
 
 - Service errors map to HTTP in the endpoint only: 404 not found, 409 already
-  submitted, 422 incomplete/invalid answers, 503 queue capacity.
+  submitted, 422 incomplete/invalid answers. Capacity exhaustion persists the
+  task in manual review; it is never returned as HTTP 503.
 - Draft saving follows the same boundary: `public.py: save_draft` →
   `submission_service.save_submission_draft` → `submission_repo.upsert_answers`.
 
 ### Admin lead management
 
 ```text
-admin/leads.py (role guards, HTTP mapping, background-task scheduling)
+admin/leads.py (role guards and HTTP mapping; persistent task creation only)
   → service/lead_service.py
       → repositories/lead_repo.py   (detail, delivery, queue position, advisor
                                      messages, export audit log, export batches)
@@ -110,9 +114,37 @@ admin/leads.py (role guards, HTTP mapping, background-task scheduling)
       → repositories/qr_code_repo.py (channel lookup for Word export)
       → service/lead_export_service.py (Word archive, CSV escaping)
       → service/lead_status.py      (three-dimension tracking status sync)
-      → service/company_research.py (async background research task)
-      → service/report_queue.py     (re-enqueue on diagnostic-email correction)
+      → service/report_queue.py     (research/content/delivery task persistence)
 ```
+
+Lead customer-PDF export follows the same boundary. The LeadExporter-only
+prepare endpoint creates or reuses a typed `pdf_export` queue task; it never
+converts a document in the HTTP process. The download endpoint streams only a
+validated `reports.customer_pdf_bytes` snapshot and writes export and operation
+audit records. `pdf_export` is content-preserving and email-free: the report
+worker reuses the stored report snapshot, acquires the normal global processing
+and PDF slots, runs the same customer DOCX→LibreOffice renderer, and publishes
+the bytes in the same lease-fenced transaction that completes the task. Normal
+delivery persists the exact local byte object passed to the mail sender. A
+successful content regeneration clears the snapshot so stale content cannot be
+downloaded.
+
+### Organization diagnosis administrator view
+
+```text
+admin/organization.py (AdminOnly guard and HTTP mapping)
+  → service/organization_admin_service.py
+      → repositories/organization_admin_repo.py
+          → OrganizationSubmission / OrganizationAnswer + formal question bank
+```
+
+This path is read-only. It never creates or updates `CompanyLead`,
+`DiagnosisSubmission`, `QuestionAnswer`, `Report` or `ReportDeliveryJob`, and
+it has no company-research, AI, PDF or email execution path.
+
+`app/main.py` initializes and seeds the Web application only. It never starts
+an embedded development consumer. Local, staging and production execution all
+require the independent `scripts/report_worker.py` process.
 
 ### Lead tracking: three independent status dimensions
 
@@ -190,15 +222,16 @@ and appends an unnumbered contact block only when its snapshot has values.
 
 `POST /api/admin/leads/{lead_id}/regenerate-report` is an administrator-only,
 content-only workflow. The endpoint reserves an existing usable report and
-schedules `lead_service.run_report_regeneration_task`; it never enters the
-delivery queue. The task reuses the scored submission and the persisted,
+persists a typed `content_regeneration` task for the independent worker. The
+task reuses the scored submission and the persisted,
 evidence-validated company-research snapshot. `reporting.generate_report_candidate`
 calls the LLM and runs the existing V2 structural validation without mutating
 the stored report. Only a validated candidate is applied in one transaction,
 after a second active-delivery conflict check. Success replaces HTML, summary,
-recommendations and advisor messages and marks the former PDF snapshot pending;
+recommendations and advisor messages, marks the former PDF state pending and
+clears the persisted customer-PDF bytes;
 failure restores the prior usable status and keeps all prior report content.
-Neither path generates a PDF, creates or changes a delivery job, or sends email.
+It creates no delivery-kind job, generates no PDF and sends no email.
 
 `POST /api/admin/leads/{lead_id}/retry-attachment-delivery` is a separate
 administrator action for a reviewed, already-generated report. It rejects sent
@@ -222,9 +255,10 @@ Guards are prebuilt in `utils/auth.py`:
 | Guard | Allowed roles | Typical routes |
 |---|---|---|
 | `AdminOnly` | admin | users, API-gateway config, lead delete / diagnostic-email / manual research |
+| Organization admin view | admin | organization diagnosis aggregation, raw answer detail/export (read-only) |
 | `ContentManager` | admin, operator | question/module/case/channel write operations |
 | `LeadViewer` | admin, operator, sales, consultant | lead list/detail, question/case/channel lists, analytics, events |
-| `LeadExporter` | admin, operator, sales | lead CSV export, lead Word export |
+| `LeadExporter` | admin, operator, sales | lead CSV export, lead Word export, customer PDF prepare/download |
 | `ReportViewer` | admin, operator, sales, consultant | report detail |
 
 Authentication accepts a Bearer token or the admin HttpOnly session cookie
@@ -282,6 +316,16 @@ attempt. Everything the model returns is untrusted until reconciled:
   API error (queue retry).
 
 ### Report queue lease and heartbeat
+
+All modes use one persistent job table with a `task_kind`: full delivery,
+research-only, content-only regeneration, attachment-only delivery, or
+email-free customer-PDF export. The
+singleton database scheduler row governs tier capacities, processing pause,
+global processing concurrency and PDF concurrency. Placement, promotion,
+claims and PDF-slot acquisition lock row 1, so accidentally starting multiple
+worker processes cannot exceed configured global limits. The supervisor polls
+about every two seconds; raising concurrency permits immediate additional
+claims, while lowering it never cancels work already running.
 
 Every `report_delivery_jobs` claim issues a one-time `lock_token`. While a job
 runs, a heartbeat loop renews `locked_at` every 30 seconds via a conditional

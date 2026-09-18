@@ -58,6 +58,125 @@ export type QuestionModule = {
   questions: Question[];
 };
 
+export type OrganizationCompanySuggestion = {
+  company_name: string;
+};
+
+export type OrganizationCompanySuggestionResponse = {
+  items: OrganizationCompanySuggestion[];
+};
+
+export type OrganizationSubmissionCreate = {
+  company_name_input: string;
+  company_name: string;
+  respondent_name: string;
+  department: string;
+  position: string;
+};
+
+export type OrganizationSubmissionCreated = {
+  id: number;
+  access_token: string;
+  status: string;
+};
+
+export type OrganizationAnswer = {
+  question_id: number;
+  answer_value: number;
+};
+
+export type OrganizationSubmissionRead = OrganizationSubmissionCreate & {
+  id: number;
+  status: string;
+  created_at: string;
+  submitted_at: string | null;
+};
+
+export type OrganizationCompanySummary = {
+  company_name: string;
+  submitted_count: number;
+  draft_count: number;
+  department_count: number;
+  latest_submitted_at: string | null;
+};
+
+export type OrganizationCompanyListResponse = {
+  items: OrganizationCompanySummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
+export type OrganizationSubmissionAdminRead = {
+  id: number;
+  company_name: string;
+  respondent_name: string;
+  department: string;
+  position: string;
+  status: "draft" | "submitted" | string;
+  created_at: string;
+  submitted_at: string | null;
+};
+
+export type OrganizationCompanyDetailResponse = {
+  company_name: string;
+  submitted_count: number;
+  draft_count: number;
+  department_count: number;
+  latest_submitted_at: string | null;
+  departments: string[];
+  items: OrganizationSubmissionAdminRead[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
+export type OrganizationQuestionAnswerAdminRead = {
+  code: string;
+  text: string;
+  max_score: number;
+  answer_value: number | null;
+};
+
+export type OrganizationQuestionModuleAdminRead = {
+  code: string;
+  name: string;
+  sort_order: number;
+  questions: OrganizationQuestionAnswerAdminRead[];
+};
+
+export type OrganizationReportAdminRead = {
+  id: number;
+  version: number;
+  status: string;
+  report_format_version: number;
+  title: string;
+  source_enterprise_report_id: number | null;
+  model_name: string | null;
+  generation_error: string | null;
+  generation_started_at: string | null;
+  generation_completed_at: string | null;
+  created_at: string;
+  pdf_available: boolean;
+};
+
+export type OrganizationReportGenerationResponse = {
+  report_id: number;
+  task_id: number;
+  version: number;
+  status: string;
+  message: string;
+};
+
+export type OrganizationSubmissionAdminDetail = OrganizationSubmissionAdminRead & {
+  modules: OrganizationQuestionModuleAdminRead[];
+  analysis_status: string;
+  analysis_note: string | null;
+  reports: OrganizationReportAdminRead[];
+};
+
 export type DimensionScore = {
   module_code: string;
   module_name: string;
@@ -205,6 +324,44 @@ export type ReportContactSettings = {
   updated_at: string | null;
 };
 
+export type ReportQueueSettings = {
+  processing_concurrency: number;
+  active_queue_capacity: number;
+  automatic_wait_capacity: number;
+  pdf_concurrency: number;
+  processing_paused: boolean;
+  promotion_paused: boolean;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
+export type ReportQueueManualJob = {
+  id: number;
+  lead_id: number;
+  company_name: string;
+  report_id: number;
+  report_title: string;
+  task_kind: string;
+  status: string;
+  queue_state: string;
+  attempts: number;
+  max_attempts: number;
+  last_error: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+  created_at: string;
+};
+
+export type ReportQueueOverview = {
+  settings: ReportQueueSettings;
+  queue_state_counts: Record<string, number>;
+  lifecycle_counts: Record<string, number>;
+  processing_stage_counts: Record<string, number>;
+  approximate_drain_minutes: number | null;
+  eta_basis_completed_jobs: number;
+  manual_review_jobs: ReportQueueManualJob[];
+};
+
 export type User = {
   id: number;
   email: string;
@@ -243,6 +400,9 @@ export type LeadDetail = {
     pdf_started_at: string | null;
     pdf_completed_at: string | null;
     pdf_elapsed_seconds: number | null;
+    customer_pdf_ready: boolean;
+    customer_pdf_export_status: "queued" | "processing" | "cancelled" | "failed" | null;
+    customer_pdf_export_error: string | null;
     html_content: string;
     summary: Record<string, unknown>;
     company_research: CompanyResearch | null;
@@ -266,5 +426,14 @@ export type LeadDetail = {
     updated_at: string | null;
     elapsed_seconds: number | null;
     queue_position: number | null;
+  } | null;
+  queue_task: {
+    id: number;
+    status: string;
+    queue_state: string | null;
+    processing_stage: string | null;
+    task_kind: string;
+    run_after: string;
+    last_error: string | null;
   } | null;
 };

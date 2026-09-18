@@ -1,15 +1,15 @@
 /** 后台管理 — 登录态、统计看板、线索、题库、案例、账号与渠道。 */
 
-import { computed, reactive, ref, watch, type Component } from "vue";
-import { BookOpen, BriefcaseBusiness, FileText, KeyRound, LayoutDashboard, QrCode, Settings, Users } from "lucide-vue-next";
+import { computed, onBeforeUnmount, reactive, ref, watch, type Component } from "vue";
+import { BookOpen, BriefcaseBusiness, ClipboardList, FileText, KeyRound, LayoutDashboard, QrCode, Settings, Users } from "lucide-vue-next";
 
 import { ApiError, api, type LeadQueryParams } from "../api";
-import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, CompanyResearchValue, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, ReportContactSettings, User } from "../types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, CompanyResearch, CompanyResearchValue, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, ReportContactSettings, ReportQueueOverview, ReportQueueSettings, User } from "../types";
 import { isValidEmail } from "../utils/format";
 import { normalizeReportHtml } from "../utils/reportHtml";
 import { clearToasts, pushToast } from "./feedback";
 
-export type AdminTab = "overview" | "leads" | "questions" | "cases" | "users" | "channels" | "gateway" | "settings";
+export type AdminTab = "overview" | "leads" | "organization" | "questions" | "cases" | "users" | "channels" | "gateway" | "settings";
 type LeadSortOrder = "newest" | "oldest";
 export type LeadPaginationItem = number | "ellipsis-left" | "ellipsis-right";
 
@@ -126,9 +126,19 @@ export function useAdmin() {
   const exportBatchPanelOpen = ref(false);
   const batchDownloading = ref<number | null>(null);
   const leadWordExporting = ref(false);
+  const leadPdfExporting = ref(false);
+  let leadPdfExportPollTimer: number | null = null;
+  let leadPdfExportPollLeadId: number | null = null;
   const gatewayConfig = ref<GatewayConfig | null>(null);
   const reportContactSettings = ref<ReportContactSettings | null>(null);
   const reportContactSaving = ref(false);
+  const reportQueueSettings = ref<ReportQueueSettings | null>(null);
+  const reportQueueOverview = ref<ReportQueueOverview | null>(null);
+  const reportQueueSaving = ref(false);
+  const reportQueueLoading = ref(false);
+  const reportQueueActionRunning = ref(false);
+  const selectedReportQueueJobIds = ref<number[]>([]);
+  const reportQueueRejectReason = ref("");
   const searchSaving = ref(false);
   const searchTesting = ref(false);
   const llmSaving = ref(false);
@@ -151,6 +161,14 @@ export function useAdmin() {
     phone: "",
     wechat: "",
     email: ""
+  });
+  const reportQueueForm = reactive({
+    processing_concurrency: 2,
+    active_queue_capacity: 50,
+    automatic_wait_capacity: 200,
+    pdf_concurrency: 1,
+    processing_paused: false,
+    promotion_paused: false,
   });
 
   const caseForm = reactive({
@@ -175,6 +193,7 @@ export function useAdmin() {
   const baseAdminTabs: { key: AdminTab; label: string; icon: Component; adminOnly?: boolean }[] = [
     { key: "overview", label: "统计", icon: LayoutDashboard },
     { key: "leads", label: "线索", icon: BriefcaseBusiness },
+    { key: "organization", label: "组织诊断", icon: ClipboardList, adminOnly: true },
     { key: "questions", label: "题库", icon: BookOpen },
     { key: "cases", label: "案例", icon: FileText },
     { key: "users", label: "账号", icon: Users },
@@ -254,7 +273,9 @@ export function useAdmin() {
       if (tab === "users") users.value = await api.users().catch(() => []);
       if (tab === "channels") channels.value = await api.channels().catch(() => []);
       if (tab === "gateway") await loadGatewayTab();
-      if (tab === "settings" && adminUser.value?.role === "admin") await loadReportContactSettings();
+      if (tab === "settings" && adminUser.value?.role === "admin") {
+        await Promise.all([loadReportContactSettings(), loadReportQueueData()]);
+      }
     } catch (err) {
       if (!handleAdminRequestError(err)) {
         pushToast("error", err instanceof Error ? err.message : "加载后台数据失败");
@@ -370,8 +391,10 @@ export function useAdmin() {
     diagnosticEmailDraft.value = "";
     clearResearchPolling();
     clearReportRegenerationPolling();
+    clearLeadPdfExportPolling();
     researchRunning.value = false;
     reportRegenerationRunning.value = false;
+    leadPdfExporting.value = false;
     clearToasts();
   }
 
@@ -731,6 +754,72 @@ export function useAdmin() {
     hydrateGatewayForm();
   }
 
+  function clearLeadPdfExportPolling() {
+    if (leadPdfExportPollTimer !== null) {
+      window.clearTimeout(leadPdfExportPollTimer);
+      leadPdfExportPollTimer = null;
+    }
+    leadPdfExportPollLeadId = null;
+  }
+
+  async function finishLeadPdfDownload(leadId: number) {
+    await api.leadPdfExport(leadId);
+    clearLeadPdfExportPolling();
+    leadPdfExporting.value = false;
+    pushToast("success", "客户版 PDF 已导出");
+  }
+
+  async function pollLeadPdfExport(leadId: number, attempt: number) {
+    if (leadPdfExportPollLeadId !== leadId) return;
+    try {
+      const refreshed = await api.leadDetail(leadId);
+      if (leadPdfExportPollLeadId !== leadId) return;
+      if (selectedLeadDetail.value?.lead.id === leadId) {
+        selectedLeadDetail.value = refreshed;
+      }
+      if (refreshed.report?.customer_pdf_ready) {
+        await finishLeadPdfDownload(leadId);
+        return;
+      }
+      if (refreshed.report?.customer_pdf_export_status === "failed") {
+        throw new Error(refreshed.report.customer_pdf_export_error || "客户版 PDF 生成失败，请稍后重试");
+      }
+      if (attempt >= 80) {
+        throw new Error("客户版 PDF 仍在生成，请稍后再次导出");
+      }
+      leadPdfExportPollTimer = window.setTimeout(
+        () => void pollLeadPdfExport(leadId, attempt + 1),
+        1500,
+      );
+    } catch (err) {
+      if (leadPdfExportPollLeadId !== leadId) return;
+      clearLeadPdfExportPolling();
+      leadPdfExporting.value = false;
+      pushToast("error", err instanceof Error ? err.message : "导出客户版 PDF 失败");
+    }
+  }
+
+  async function exportLeadPdf() {
+    const detail = selectedLeadDetail.value;
+    if (!detail || leadPdfExporting.value) return;
+    leadPdfExporting.value = true;
+    clearLeadPdfExportPolling();
+    leadPdfExportPollLeadId = detail.lead.id;
+    try {
+      const result = await api.prepareLeadPdfExport(detail.lead.id);
+      if (result.status === "ready") {
+        await finishLeadPdfDownload(detail.lead.id);
+        return;
+      }
+      pushToast("success", result.message || "客户版 PDF 已加入生成队列");
+      await pollLeadPdfExport(detail.lead.id, 1);
+    } catch (err) {
+      clearLeadPdfExportPolling();
+      leadPdfExporting.value = false;
+      pushToast("error", err instanceof Error ? err.message : "导出客户版 PDF 失败");
+    }
+  }
+
   async function retryReportAttachmentDelivery() {
     const detail = selectedLeadDetail.value;
     if (!detail || attachmentDeliveryRunning.value) return;
@@ -815,6 +904,73 @@ export function useAdmin() {
       pushToast("error", err instanceof Error ? err.message : "保存报告联系信息失败");
     } finally {
       reportContactSaving.value = false;
+    }
+  }
+
+  function hydrateReportQueueForm(settings: ReportQueueSettings) {
+    reportQueueForm.processing_concurrency = settings.processing_concurrency;
+    reportQueueForm.active_queue_capacity = settings.active_queue_capacity;
+    reportQueueForm.automatic_wait_capacity = settings.automatic_wait_capacity;
+    reportQueueForm.pdf_concurrency = settings.pdf_concurrency;
+    reportQueueForm.processing_paused = settings.processing_paused;
+    reportQueueForm.promotion_paused = settings.promotion_paused;
+  }
+
+  async function loadReportQueueData() {
+    reportQueueLoading.value = true;
+    try {
+      const [settings, overview] = await Promise.all([api.reportQueueSettings(), api.reportQueueOverview()]);
+      reportQueueSettings.value = settings;
+      reportQueueOverview.value = overview;
+      hydrateReportQueueForm(settings);
+    } finally {
+      reportQueueLoading.value = false;
+    }
+  }
+
+  async function saveReportQueueSettings() {
+    if (reportQueueForm.active_queue_capacity < reportQueueForm.processing_concurrency) {
+      pushToast("error", "执行队列容量不能小于同时处理报告数");
+      return;
+    }
+    if (reportQueueForm.pdf_concurrency > reportQueueForm.processing_concurrency) {
+      pushToast("error", "PDF 转换并发不能大于同时处理报告数");
+      return;
+    }
+    const increased = reportQueueForm.processing_concurrency > (reportQueueSettings.value?.processing_concurrency || 0);
+    if (increased && !window.confirm("提高同时处理报告数会增加服务器 CPU、内存及模型接口压力，确认继续吗？")) return;
+    reportQueueSaving.value = true;
+    try {
+      const saved = await api.saveReportQueueSettings({ ...reportQueueForm, confirm_processing_increase: increased });
+      reportQueueSettings.value = saved;
+      hydrateReportQueueForm(saved);
+      reportQueueOverview.value = await api.reportQueueOverview();
+      pushToast("success", "任务调度设置已保存");
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "保存任务调度设置失败");
+    } finally {
+      reportQueueSaving.value = false;
+    }
+  }
+
+  async function runReportQueueAction(kind: "approve" | "reject", jobIds = selectedReportQueueJobIds.value) {
+    if (!jobIds.length) {
+      pushToast("error", "请先选择人工审核任务");
+      return;
+    }
+    reportQueueActionRunning.value = true;
+    try {
+      const result = kind === "approve"
+        ? await api.approveReportQueueJobs(jobIds)
+        : await api.rejectReportQueueJobs(jobIds, reportQueueRejectReason.value.trim());
+      selectedReportQueueJobIds.value = [];
+      reportQueueRejectReason.value = "";
+      reportQueueOverview.value = await api.reportQueueOverview();
+      pushToast("success", result.message);
+    } catch (err) {
+      pushToast("error", err instanceof Error ? err.message : "队列操作失败");
+    } finally {
+      reportQueueActionRunning.value = false;
     }
   }
 
@@ -1032,6 +1188,12 @@ export function useAdmin() {
     }
   });
 
+  onBeforeUnmount(() => {
+    clearResearchPolling();
+    clearReportRegenerationPolling();
+    clearLeadPdfExportPolling();
+  });
+
   return {
     adminToken,
     adminUser,
@@ -1078,12 +1240,21 @@ export function useAdmin() {
     exportBatchPanelOpen,
     batchDownloading,
     leadWordExporting,
+    leadPdfExporting,
     questionModuleForm,
     questionForm,
     gatewayConfig,
     reportContactSettings,
     reportContactForm,
     reportContactSaving,
+    reportQueueSettings,
+    reportQueueOverview,
+    reportQueueForm,
+    reportQueueSaving,
+    reportQueueLoading,
+    reportQueueActionRunning,
+    selectedReportQueueJobIds,
+    reportQueueRejectReason,
     searchForm,
     llmForm,
     searchSaving,
@@ -1131,6 +1302,7 @@ export function useAdmin() {
     toggleExportBatches,
     downloadBatch,
     exportLeadWord,
+    exportLeadPdf,
     deleteLead,
     logoutAdmin,
     createCase,
@@ -1148,5 +1320,8 @@ export function useAdmin() {
     testSearchConfig,
     testLlmConfig,
     saveReportContactSettings,
+    saveReportQueueSettings,
+    loadReportQueueData,
+    runReportQueueAction,
   };
 }

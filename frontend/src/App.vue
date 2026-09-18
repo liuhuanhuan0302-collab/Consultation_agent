@@ -21,6 +21,7 @@ import {
   X
 } from "lucide-vue-next";
 import CustomerReportView from "./components/CustomerReportView.vue";
+import OrganizationDiagnosisAdmin from "./components/OrganizationDiagnosisAdmin.vue";
 import { api } from "./api";
 import { dismissToast, error, toasts } from "./composables/feedback";
 import { useAdmin, companyResearchSections, researchLegacyText, researchSubsections, searchProviderOfficialUrls } from "./composables/useAdmin";
@@ -239,12 +240,21 @@ const {
   exportBatchPanelOpen,
   batchDownloading,
   leadWordExporting,
+  leadPdfExporting,
   questionModuleForm,
   questionForm,
   gatewayConfig,
   reportContactSettings,
   reportContactForm,
   reportContactSaving,
+  reportQueueSettings,
+  reportQueueOverview,
+  reportQueueForm,
+  reportQueueSaving,
+  reportQueueLoading,
+  reportQueueActionRunning,
+  selectedReportQueueJobIds,
+  reportQueueRejectReason,
   searchForm,
   llmForm,
   searchSaving,
@@ -291,6 +301,7 @@ const {
   toggleExportBatches,
   downloadBatch,
   exportLeadWord,
+  exportLeadPdf,
   deleteLead,
   logoutAdmin,
   createCase,
@@ -308,6 +319,9 @@ const {
   testSearchConfig,
   testLlmConfig,
   saveReportContactSettings,
+  saveReportQueueSettings,
+  loadReportQueueData,
+  runReportQueueAction,
 } = useAdmin();
 
 const leadAdvancedFilterTrigger = ref<HTMLButtonElement | null>(null);
@@ -375,6 +389,15 @@ function syncLeadRowsToViewport() {
   syncLeadPageSize(window.innerHeight);
 }
 
+function enterEnterpriseInfo() {
+  void begin().catch(() => undefined);
+}
+
+function restartEnterpriseFlow() {
+  restartFlow();
+  enterEnterpriseInfo();
+}
+
 onMounted(async () => {
   window.addEventListener("beforeunload", handleBeforeUnload);
   if (isAdmin) {
@@ -388,6 +411,7 @@ onMounted(async () => {
       await loadPublicReport();
     } else {
       await bootClient();
+      if (step.value === "intro") enterEnterpriseInfo();
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : "加载失败";
@@ -675,12 +699,12 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else class="table-section lead-detail-page" aria-labelledby="lead-detail-title">
-        <header class="lead-detail-page-header">
+        <header class="lead-detail-page-header" style="flex-wrap: wrap">
           <div>
             <p class="eyebrow">客户详情</p>
             <h2 id="lead-detail-title">{{ selectedLeadDetail?.lead.company_name || "客户详情" }}</h2>
           </div>
-          <div class="lead-detail-actions">
+          <div class="lead-detail-actions" style="flex: 1 1 430px; flex-wrap: wrap; justify-content: flex-end; min-width: 0">
             <button
               v-if="selectedLeadDetail && canDeleteLeads"
               class="danger-text-button"
@@ -694,6 +718,13 @@ onBeforeUnmount(() => {
               :disabled="leadWordExporting"
               @click="exportLeadWord"
             ><ArrowDownToLine :size="17" /> {{ leadWordExporting ? "导出中..." : "导出 Word" }}</button>
+            <button
+              v-if="selectedLeadDetail && canExportLeads"
+              class="primary"
+              type="button"
+              :disabled="leadPdfExporting"
+              @click="exportLeadPdf"
+            ><ArrowDownToLine :size="17" /> {{ leadPdfExporting ? "生成中..." : "导出 PDF" }}</button>
             <button class="secondary" type="button" @click="closeLeadDetail"><ArrowLeft :size="17" /> 返回线索列表</button>
           </div>
         </header>
@@ -879,6 +910,8 @@ onBeforeUnmount(() => {
       </section>
       </template>
 
+      <OrganizationDiagnosisAdmin v-if="adminTab === 'organization'" />
+
       <div v-if="adminTab === 'questions'" class="module-list">
         <header class="question-bank-header">
           <div>
@@ -960,6 +993,69 @@ onBeforeUnmount(() => {
       </div>
 
       <section v-if="adminTab === 'settings'" class="system-settings-panel">
+        <form class="module-block system-settings-form" @submit.prevent="saveReportQueueSettings">
+          <header>
+            <div><p class="eyebrow">动态生效</p><h2>任务调度参数</h2></div>
+            <button class="primary" type="submit" :disabled="reportQueueSaving || reportQueueLoading"><Check :size="18" /> {{ reportQueueSaving ? "保存中..." : "保存调度设置" }}</button>
+          </header>
+          <p class="gateway-hint">设置保存在数据库中，独立 worker 会动态读取。降低容量不会移动或取消现有任务；扩大自动候补容量也不会自动放行人工审核任务。</p>
+          <div class="scheduler-settings-grid">
+            <label>同时处理报告数<input v-model.number="reportQueueForm.processing_concurrency" type="number" min="1" max="64" /></label>
+            <label>执行队列容量<input v-model.number="reportQueueForm.active_queue_capacity" type="number" min="1" max="10000" /></label>
+            <label>自动候补容量<input v-model.number="reportQueueForm.automatic_wait_capacity" type="number" min="0" max="100000" /></label>
+            <label>PDF 转换并发<input v-model.number="reportQueueForm.pdf_concurrency" type="number" min="1" max="64" /></label>
+          </div>
+          <div class="scheduler-toggle-row">
+            <label><input v-model="reportQueueForm.processing_paused" type="checkbox" /> 暂停领取新任务</label>
+            <label><input v-model="reportQueueForm.promotion_paused" type="checkbox" /> 暂停队列晋级</label>
+          </div>
+          <small v-if="reportQueueSettings?.updated_at" class="settings-updated-at">最近更新：{{ formatDateTime(reportQueueSettings.updated_at) }}<span v-if="reportQueueSettings.updated_by"> · {{ reportQueueSettings.updated_by }}</span></small>
+        </form>
+
+        <section class="module-block queue-management-card" aria-labelledby="queue-management-title">
+          <header class="queue-management-header">
+            <div><p class="eyebrow">运行状态</p><h2 id="queue-management-title">队列管理</h2></div>
+            <button class="secondary" type="button" :disabled="reportQueueLoading" @click="loadReportQueueData">{{ reportQueueLoading ? "刷新中..." : "刷新队列" }}</button>
+          </header>
+          <div v-if="reportQueueOverview" class="queue-metrics-grid">
+            <article><span>执行队列</span><strong>{{ reportQueueOverview.queue_state_counts.active || 0 }}</strong></article>
+            <article><span>自动候补</span><strong>{{ reportQueueOverview.queue_state_counts.automatic_waiting || 0 }}</strong></article>
+            <article class="warning"><span>人工审核</span><strong>{{ reportQueueOverview.queue_state_counts.manual_review || 0 }}</strong></article>
+            <article><span>已批准等待</span><strong>{{ reportQueueOverview.queue_state_counts.approved_waiting || 0 }}</strong></article>
+          </div>
+          <div v-if="reportQueueOverview" class="queue-summary-row">
+            <span>处理中 {{ reportQueueOverview.lifecycle_counts.processing || 0 }}</span>
+            <span>等待执行 {{ reportQueueOverview.lifecycle_counts.queued || 0 }}</span>
+            <span>失败 {{ reportQueueOverview.lifecycle_counts.failed || 0 }}</span>
+            <span>预计清空：{{ reportQueueOverview.approximate_drain_minutes === null ? "暂无可靠估算" : `${reportQueueOverview.approximate_drain_minutes} 分钟` }}</span>
+          </div>
+          <div v-if="reportQueueOverview" class="queue-stage-list">
+            <span v-for="(count, stage) in reportQueueOverview.processing_stage_counts" :key="stage">{{ stage }}：{{ count }}</span>
+          </div>
+          <div class="queue-batch-actions">
+            <button class="primary" type="button" :disabled="reportQueueActionRunning || !selectedReportQueueJobIds.length" @click="runReportQueueAction('approve')">批量批准</button>
+            <input v-model="reportQueueRejectReason" maxlength="500" placeholder="拒绝原因（可选）" />
+            <button class="danger" type="button" :disabled="reportQueueActionRunning || !selectedReportQueueJobIds.length" @click="runReportQueueAction('reject')">批量拒绝</button>
+          </div>
+          <div class="queue-table-wrap">
+            <table class="queue-review-table">
+              <thead><tr><th>选择</th><th>公司 / 报告</th><th>任务</th><th>尝试</th><th>原因</th><th>进入时间</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="job in reportQueueOverview?.manual_review_jobs || []" :key="job.id">
+                  <td><input v-model="selectedReportQueueJobIds" type="checkbox" :value="job.id" :aria-label="`选择任务 ${job.id}`" /></td>
+                  <td><strong>{{ job.company_name }}</strong><small>#{{ job.report_id }} · {{ job.report_title }}</small></td>
+                  <td>#{{ job.id }} · {{ job.task_kind }}</td>
+                  <td>{{ job.attempts }}/{{ job.max_attempts }}</td>
+                  <td class="queue-error-cell">{{ job.last_error || "等待管理员判断" }}</td>
+                  <td>{{ formatDateTime(job.created_at) }}</td>
+                  <td><div class="queue-row-actions"><button class="text-action" type="button" :disabled="reportQueueActionRunning" @click="runReportQueueAction('approve', [job.id])">批准</button><button class="danger-text-button" type="button" :disabled="reportQueueActionRunning" @click="runReportQueueAction('reject', [job.id])">拒绝</button></div></td>
+                </tr>
+                <tr v-if="!(reportQueueOverview?.manual_review_jobs.length)"><td colspan="7" class="empty-cell">当前没有待人工审核任务</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <form class="module-block system-settings-form" @submit.prevent="saveReportContactSettings">
           <header>
             <div>
@@ -1081,16 +1177,6 @@ onBeforeUnmount(() => {
 
       <div v-if="error" class="alert">{{ error }}</div>
 
-      <div v-if="step === 'intro'" class="intro-grid">
-        <div class="intro-copy">
-          <p>完成企业信息与当前诊断题库后，系统会生成结构化诊断报告，包含核心发现、能力画像、题项排序和下一步咨询建议。</p>
-          <button class="primary" @click="begin"><FileText :size="18" /> 开始自测</button>
-        </div>
-        <div class="signal-map" aria-hidden="true">
-          <span v-for="item in ['客户', '业务', '组织', '流程', '数据', '智能']" :key="item">{{ item }}</span>
-        </div>
-      </div>
-
       <form v-if="step === 'info'" class="form-grid" @submit.prevent="submitLead">
         <label>公司名称<input v-model="leadForm.company_name" required /></label>
         <label>所在城市<input v-model="leadForm.city" required placeholder="例如：广东省深圳市" /></label>
@@ -1204,7 +1290,7 @@ onBeforeUnmount(() => {
         </div>
         <p v-if="!reportFailure && reportWaitSeconds < 60" class="submitted-note">正在进行 AI 分析，请保持当前页面开启。</p>
         <p v-else-if="!reportFailure" class="submitted-note">您的诊断资料已收到，报告正在进一步审核，完成后将发送至您的邮箱。</p>
-        <button class="secondary" type="button" @click="restartFlow">重新填写</button>
+        <button class="secondary" type="button" @click="restartEnterpriseFlow">重新填写</button>
       </section>
 
       <CustomerReportView

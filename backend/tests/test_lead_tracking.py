@@ -357,6 +357,35 @@ def test_sync_processing_status_without_submission_stays_pending():
     engine.dispose()
 
 
+def test_non_delivery_queue_jobs_do_not_replace_customer_delivery_status():
+    db, engine, user = create_db()
+    lead = _lead_with_pipeline(db, report_status="generated", delivery_status="sent")
+    submission = lead.submissions[0]
+    report = submission.report
+    db.add(
+        ReportDeliveryJob(
+            lead_id=lead.id,
+            submission_id=submission.id,
+            report_id=report.id,
+            recipient_email="",
+            status="cancelled",
+            task_kind="content_regeneration",
+        )
+    )
+    db.commit()
+
+    sync_lead_processing_status(db, lead.id)
+    db.commit()
+    db.refresh(lead)
+
+    assert lead.processing_status == "completed"
+    detail = lead_service.get_lead_detail(db, lead.id)
+    assert detail["delivery"]["status"] == "sent"
+    assert detail["queue_task"]["task_kind"] == "content_regeneration"
+    db.close()
+    engine.dispose()
+
+
 def test_trigger_research_and_resume_move_lead_to_processing(monkeypatch):
     db, engine, user = create_db()
     lead = _lead_with_pipeline(

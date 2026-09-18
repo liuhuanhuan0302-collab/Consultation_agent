@@ -3,7 +3,7 @@ import inspect
 from datetime import datetime, timedelta
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -156,7 +156,8 @@ def test_force_research_replaces_cached_result_and_records_audit(monkeypatch):
     assert result.status == "started"
     assert result.report_id == report.id
     assert result.force is True
-    assert report.research_status == "processing"
+    assert report.research_status == "pending"
+    assert db.query(ReportDeliveryJob).filter_by(report_id=report.id, task_kind="research_only").count() == 1
     assert db.query(OperationLog).filter(OperationLog.action == "trigger_lead_research").count() == 1
     db.close()
     engine.dispose()
@@ -179,32 +180,23 @@ def test_delete_service_preserves_audit_after_cascade():
     engine.dispose()
 
 
-def test_email_endpoint_schedules_only_after_service_success(monkeypatch):
+def test_email_endpoint_returns_without_in_process_scheduling(monkeypatch):
     async def run(result):
         monkeypatch.setattr(lead_service, "update_diagnostic_email", lambda *_args: result)
-        background = BackgroundTasks()
         response = await leads_endpoint.update_lead_diagnostic_email(
             1,
             LeadDiagnosticEmailUpdate(email="new@example.com"),
-            background,
             object(),
             SimpleUser(),
         )
-        return response, background
+        return response
 
     class SimpleUser:
         id = 1
 
-    response, background = asyncio.run(
-        run(lead_service.DiagnosticEmailResult("queued", True))
-    )
+    response = asyncio.run(run(lead_service.DiagnosticEmailResult("queued", True)))
     assert response.message == "queued"
-    assert len(background.tasks) == 1
-
-    _, background = asyncio.run(
-        run(lead_service.DiagnosticEmailResult("no report", False))
-    )
-    assert background.tasks == []
+    assert asyncio.run(run(lead_service.DiagnosticEmailResult("no report", False))).message == "no report"
 
 
 # ── 继续生成报告并发送（企业情报已生成、报告/投递失败后的恢复入口） ──
@@ -318,31 +310,22 @@ def test_resume_delivery_requires_email_when_no_job():
     engine.dispose()
 
 
-def test_resume_endpoint_schedules_queue_wakeup_only_after_service_success(monkeypatch):
+def test_resume_endpoint_returns_without_in_process_scheduling(monkeypatch):
     async def run(result):
         monkeypatch.setattr(lead_service, "resume_report_delivery", lambda *_args: result)
-        background = BackgroundTasks()
         response = await leads_endpoint.resume_lead_report_delivery(
             1,
-            background,
             object(),
             SimpleUser(),
         )
-        return response, background
+        return response
 
     class SimpleUser:
         id = 1
 
-    response, background = asyncio.run(
-        run(lead_service.ResumeDeliveryResult("已重新入队", True, 1))
-    )
+    response = asyncio.run(run(lead_service.ResumeDeliveryResult("已重新入队", True, 1)))
     assert response.message == "已重新入队"
-    assert len(background.tasks) == 1
-
-    _, background = asyncio.run(
-        run(lead_service.ResumeDeliveryResult("无需继续", False, None))
-    )
-    assert background.tasks == []
+    assert asyncio.run(run(lead_service.ResumeDeliveryResult("无需继续", False, None))).message == "无需继续"
 
 
 # ── 重新生成附件并发送（不重新生成 AI 正文） ──
@@ -394,23 +377,19 @@ def test_retry_attachment_delivery_rejects_duplicate_or_sent(status):
     engine.dispose()
 
 
-def test_retry_attachment_endpoint_schedules_queue_after_success(monkeypatch):
+def test_retry_attachment_endpoint_returns_without_in_process_scheduling(monkeypatch):
     monkeypatch.setattr(
         lead_service,
         "retry_report_attachment_delivery",
         lambda *_args: lead_service.ResumeDeliveryResult("已重新加入附件生成队列", True, 1),
     )
-    background = BackgroundTasks()
-
     response = asyncio.run(leads_endpoint.retry_lead_report_attachment_delivery(
         1,
-        background,
         object(),
         type("SimpleUser", (), {"id": 1})(),
     ))
 
     assert response.message == "已重新加入附件生成队列"
-    assert len(background.tasks) == 1
 
 
 # ── 仅重新生成 AI 报告（不生成 PDF、不创建投递任务、不发送邮件） ──
@@ -521,7 +500,8 @@ def test_report_regeneration_success_replaces_only_report_and_records_audit(monk
     assert refreshed.summary_json == '{"report_format_version": 2, "new": true}'
     assert refreshed.pdf_status == "pending"
     assert refreshed.pdf_path is None
-    assert db.query(ReportDeliveryJob).count() == 1
+    assert db.query(ReportDeliveryJob).count() == 2
+    assert db.query(ReportDeliveryJob).filter_by(task_kind="content_regeneration").count() == 1
     assert db.get(ReportDeliveryJob, sent.id).status == "sent"
     success_log = db.query(OperationLog).filter(OperationLog.action == "regenerate_ai_report").one()
     assert '"status": "succeeded"' in success_log.detail_json
@@ -553,9 +533,43 @@ def test_report_regeneration_failure_preserves_old_snapshot(monkeypatch):
     assert (refreshed.html_content, refreshed.summary_json, refreshed.pdf_status, refreshed.pdf_path) == old_values
     assert "原报告已保留" in refreshed.generation_error
     assert len(refreshed.generation_error) <= 500
-    assert db.query(ReportDeliveryJob).count() == 0
+    assert db.query(ReportDeliveryJob).count() == 1
     failure_log = db.query(OperationLog).filter(OperationLog.action == "regenerate_ai_report").one()
     assert '"status": "failed"' in failure_log.detail_json
+    db.close()
+    engine.dispose()
+
+
+def test_report_regeneration_queue_lease_fences_late_worker(monkeypatch):
+    db, engine, user = create_db()
+    lead, report = _regeneration_fixture(db)
+    monkeypatch.setattr(lead_service, "_validated_persisted_research", lambda _report: {})
+    monkeypatch.setattr(lead_service, "SessionLocal", lambda: Session(engine))
+    result = lead_service.trigger_report_regeneration(db, user, lead.id)
+    job = db.query(ReportDeliveryJob).filter_by(task_kind="content_regeneration").one()
+    job.status = "processing"
+    job.lock_token = "new-owner-token"
+    db.commit()
+    called = False
+
+    async def candidate_must_not_run(_db, _report):
+        nonlocal called
+        called = True
+        raise AssertionError("stale worker must not call model")
+
+    monkeypatch.setattr(lead_service, "generate_report_candidate", candidate_must_not_run)
+    asyncio.run(lead_service.run_report_regeneration_task(
+        result.report_id,
+        result.user_id,
+        result.previous_status,
+        result.generation_started_at,
+        queue_job_id=job.id,
+        queue_lock_token="stale-token",
+    ))
+
+    db.expire_all()
+    assert called is False
+    assert db.get(Report, report.id).html_content == "<article>old</article>"
     db.close()
     engine.dispose()
 
@@ -659,13 +673,8 @@ def test_regenerate_endpoint_schedules_isolated_background_task(monkeypatch):
         started_at,
     )
     monkeypatch.setattr(lead_service, "trigger_report_regeneration", lambda *_args: result)
-    background = BackgroundTasks()
-    response = leads_endpoint.regenerate_lead_ai_report(1, background, object(), SimpleUser())
+    response = leads_endpoint.regenerate_lead_ai_report(1, object(), SimpleUser())
     assert response == {"status": "started", "message": "仅重新生成内容"}
-    assert len(background.tasks) == 1
-    task = background.tasks[0]
-    assert task.func is lead_service.run_report_regeneration_task
-    assert task.args == (7, 9, "generated", started_at)
 
 
 def test_regenerate_endpoint_uses_real_admin_only_guard_and_maps_conflict(monkeypatch):
@@ -681,6 +690,6 @@ def test_regenerate_endpoint_uses_real_admin_only_guard_and_maps_conflict(monkey
 
     monkeypatch.setattr(lead_service, "trigger_report_regeneration", conflict)
     with pytest.raises(HTTPException) as raised:
-        leads_endpoint.regenerate_lead_ai_report(1, BackgroundTasks(), object(), object())
+        leads_endpoint.regenerate_lead_ai_report(1, object(), object())
     assert raised.value.status_code == 409
     assert raised.value.detail == "正在处理"

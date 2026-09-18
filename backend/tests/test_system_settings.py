@@ -16,6 +16,7 @@ import app.service.reporting as reporting
 from app.api.v1.endpoints import admin
 from app.db.database import Base, get_db
 from app.models.user import Role, User
+from app.models import OperationLog, ReportQueueSetting
 from app.schemas.system_setting import ReportContactSettingsUpdate
 from app.service.lead_export_service import generate_customer_report_docx
 from app.service.pdf_service import validate_report_html
@@ -105,6 +106,68 @@ def test_report_contact_settings_api_is_admin_only_and_persists_trimmed_values()
         assert saved.status_code == 200
         assert saved.json()["phone"] == "13490000000"
         assert saved.json()["email"] == "contact@example.com"
+    engine.dispose()
+
+
+def test_report_queue_settings_api_requires_risk_confirmation_and_audits() -> None:
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    with Session(engine) as db:
+        admin_user = User(email="queue-admin@example.com", name="Admin", role=Role.admin.value, password_hash="hash")
+        db.add(admin_user)
+        db.commit()
+        admin_id = admin_user.id
+    app = FastAPI()
+    app.include_router(admin.router)
+
+    def override_db():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_db
+    payload = {
+        "processing_concurrency": 4,
+        "active_queue_capacity": 60,
+        "automatic_wait_capacity": 220,
+        "pdf_concurrency": 2,
+        "processing_paused": False,
+        "promotion_paused": False,
+    }
+    with TestClient(app) as client:
+        missing_confirmation = client.put(
+            "/api/admin/system-settings/report-queue",
+            headers=_bearer(admin_id),
+            json={**payload, "confirm_processing_increase": False},
+        )
+        assert missing_confirmation.status_code == 409
+        saved = client.put(
+            "/api/admin/system-settings/report-queue",
+            headers=_bearer(admin_id),
+            json={**payload, "confirm_processing_increase": True},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["processing_concurrency"] == 4
+        invalid = client.put(
+            "/api/admin/system-settings/report-queue",
+            headers=_bearer(admin_id),
+            json={**payload, "active_queue_capacity": 3, "confirm_processing_increase": True},
+        )
+        assert invalid.status_code == 422
+        overview = client.get("/api/admin/system-settings/report-queue/overview", headers=_bearer(admin_id))
+        assert overview.status_code == 200
+        assert overview.json()["queue_state_counts"] == {
+            "active": 0, "automatic_waiting": 0, "manual_review": 0, "approved_waiting": 0
+        }
+        assert overview.json()["approximate_drain_minutes"] == 0.0
+    with Session(engine) as db:
+        assert db.get(ReportQueueSetting, 1).processing_concurrency == 4
+        logs = db.query(OperationLog).filter(OperationLog.action == "update_report_queue_settings").all()
+        assert len(logs) == 1
+        assert '"processing_concurrency": 4' in (logs[0].detail_json or "")
     engine.dispose()
 
 

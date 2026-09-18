@@ -54,14 +54,15 @@ def sync_lead_processing_status(db: Session, lead_id: int) -> None:
     submission = lead_repo.latest_submission_for_lead(db, lead.id)
     report = submission.report if submission else None
     delivery = lead_repo.latest_delivery_for_report(db, report.id) if report else None
+    task = lead_repo.latest_report_task(db, report.id) if report else None
 
-    status, note = _derive(report, delivery)
+    status, note = _derive(report, delivery, task)
     lead.processing_status = status
     lead.processing_note = note
 
 
-def _derive(report, delivery) -> tuple[str, str | None]:
-    if report is None and delivery is None:
+def _derive(report, delivery, task=None) -> tuple[str, str | None]:
+    if report is None and delivery is None and task is None:
         return "pending", None
 
     if delivery and delivery.status == ReportDeliveryStatus.sent.value:
@@ -76,7 +77,7 @@ def _derive(report, delivery) -> tuple[str, str | None]:
         in (CompanyResearchStatus.failed.value, CompanyResearchStatus.review.value)
     )
     in_flight = (
-        (delivery and delivery.status in (ReportDeliveryStatus.queued.value, ReportDeliveryStatus.processing.value))
+        (task and task.status in (ReportDeliveryStatus.queued.value, ReportDeliveryStatus.processing.value))
         or (report and report.research_status == CompanyResearchStatus.processing.value)
         or (report and report.status in (ReportStatus.pending.value, ReportStatus.generating.value) and not research_terminal)
     )
@@ -95,6 +96,9 @@ def _derive(report, delivery) -> tuple[str, str | None]:
 
     if delivery and delivery.status == ReportDeliveryStatus.failed.value:
         return "manual_review", _failure_note("邮件/PDF 投递失败", delivery.last_error)
+
+    if task and task.status == ReportDeliveryStatus.failed.value:
+        return "manual_review", _failure_note("报告任务失败", task.last_error)
 
     if report and report.status in (ReportStatus.generated.value, ReportStatus.fallback.value) and delivery is None:
         return "manual_review", "报告已生成，未创建投递任务（可能缺少诊断邮箱）"

@@ -97,7 +97,62 @@ nodes:
     milestone: M4
     depends_on: [I-130]
     status: accepted
-scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150, I-160, I-170, I-060]
+  I-180:
+    title: Add persistent three-tier report queue domain
+    milestone: M4
+    depends_on: [I-160, I-170]
+    status: accepted
+  I-190:
+    title: Wire HTTP to the persistent dynamic report worker
+    milestone: M4
+    depends_on: [I-180]
+    status: accepted
+  I-200:
+    title: Add administrator queue settings and management
+    milestone: M4
+    depends_on: [I-190]
+    status: accepted
+  I-210:
+    title: Repair migration bootstrap and admin lead detail compatibility
+    milestone: M4
+    depends_on: [I-200]
+    status: accepted
+  I-220:
+    title: Align organization diagnosis company detail with lead administration
+    milestone: M5
+    depends_on: [I-210]
+    status: accepted
+  I-221:
+    title: Remove organization detail eyebrow and summary
+    milestone: M5
+    depends_on: [I-220]
+    status: accepted
+  I-222:
+    title: Add navigable organization submission detail
+    milestone: M5
+    depends_on: [I-221]
+    status: accepted
+  I-223:
+    title: Remove organization diagnosis filter bars
+    milestone: M5
+    depends_on: [I-222]
+    status: accepted
+  I-224:
+    title: Compact organization diagnosis lists
+    milestone: M5
+    depends_on: [I-223]
+    status: accepted
+  I-225:
+    title: Export customer PDF from lead detail
+    milestone: M5
+    depends_on: [I-224]
+    status: accepted
+  I-226:
+    title: Add unified local backend launcher
+    milestone: M4
+    depends_on: [I-225]
+    status: accepted
+scheduling_order: [I-040, I-010, I-020, I-030, I-050, I-070, I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150, I-160, I-170, I-180, I-190, I-200, I-210, I-220, I-221, I-222, I-223, I-224, I-225, I-226, I-060]
 optional_nodes:
   I-041:
     title: Read-only historical research audit

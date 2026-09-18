@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 from app.models.audit import ExportLog, OperationLog
 from app.models.export_batch import ExportBatch
 from app.models.lead import CompanyLead
-from app.models.report import AiConversationMessage, Report, ReportDeliveryJob, ReportDeliveryStatus
+from app.models.report import (
+    AiConversationMessage,
+    Report,
+    ReportDeliveryJob,
+    ReportDeliveryStatus,
+    ReportTaskKind,
+)
 from app.repositories.consult_repo import latest_submission_for_lead as _latest_submission_for_lead
 
 
@@ -26,11 +32,49 @@ def latest_submission_for_lead(db: Session, lead_id: int):
     return _latest_submission_for_lead(db, lead_id)
 
 
+CUSTOMER_DELIVERY_TASK_KINDS = (
+    ReportTaskKind.full_delivery.value,
+    ReportTaskKind.attachment_delivery.value,
+)
+
+
 def latest_delivery_for_report(db: Session, report_id: int) -> ReportDeliveryJob | None:
     return (
         db.query(ReportDeliveryJob)
-        .filter(ReportDeliveryJob.report_id == report_id)
+        .filter(
+            ReportDeliveryJob.report_id == report_id,
+            ReportDeliveryJob.task_kind.in_(CUSTOMER_DELIVERY_TASK_KINDS),
+        )
         .order_by(ReportDeliveryJob.created_at.desc())
+        .first()
+    )
+
+
+def latest_report_task(db: Session, report_id: int) -> ReportDeliveryJob | None:
+    return (
+        db.query(ReportDeliveryJob)
+        .filter(
+            ReportDeliveryJob.report_id == report_id,
+            ReportDeliveryJob.task_kind != ReportTaskKind.pdf_export.value,
+        )
+        .order_by(ReportDeliveryJob.created_at.desc(), ReportDeliveryJob.id.desc())
+        .first()
+    )
+
+
+def latest_report_task_for_kind(
+    db: Session,
+    report_id: int,
+    task_kind: ReportTaskKind | str,
+) -> ReportDeliveryJob | None:
+    kind = task_kind.value if isinstance(task_kind, ReportTaskKind) else str(task_kind)
+    return (
+        db.query(ReportDeliveryJob)
+        .filter(
+            ReportDeliveryJob.report_id == report_id,
+            ReportDeliveryJob.task_kind == kind,
+        )
+        .order_by(ReportDeliveryJob.created_at.desc(), ReportDeliveryJob.id.desc())
         .first()
     )
 
@@ -70,6 +114,7 @@ def latest_sent_delivery_for_report(db: Session, report_id: int) -> ReportDelive
         .filter(
             ReportDeliveryJob.report_id == report_id,
             ReportDeliveryJob.status == ReportDeliveryStatus.sent.value,
+            ReportDeliveryJob.task_kind.in_(CUSTOMER_DELIVERY_TASK_KINDS),
         )
         .order_by(ReportDeliveryJob.sent_at.desc(), ReportDeliveryJob.id.desc())
         .first()
@@ -81,6 +126,7 @@ def queued_delivery_position(db: Session, delivery_id: int) -> int:
         db.query(func.count(ReportDeliveryJob.id))
         .filter(
             ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
+            ReportDeliveryJob.task_kind.in_(CUSTOMER_DELIVERY_TASK_KINDS),
             ReportDeliveryJob.id < delivery_id,
         )
         .scalar()

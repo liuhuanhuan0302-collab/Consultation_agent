@@ -45,6 +45,188 @@ automation stops and a human decision is required.
 
 PASS
 
+## REV-I-225-1
+
+- Task: I-225
+- Reviews: DEV-I-225-1, DEV-I-225-2 and TURN-0038 handoff
+- Timestamp: 2026-09-17T16:23:38+08:00
+- Independent verification:
+  - Focused backend acceptance passed: 31 tests, exit 0.
+  - Complete backend regression passed: 298 tests, exit 0.
+  - `compileall` passed and Alembic reported the sole head
+    `e3f7a9c2d501`.
+  - Frontend `npm run build` passed: Vue type-check plus Vite, 1591 modules
+    transformed, exit 0.
+  - Source inspection confirmed typed, lease-fenced `pdf_export` work reuses
+    the existing customer DOCX-to-LibreOffice renderer and returns before the
+    email branch; normal delivery persists the exact bytes supplied to email.
+  - Service/API tests confirmed missing/not-ready behavior, task deduplication,
+    ready download, LeadExporter authorization, audit, parser validation and
+    successful-regeneration invalidation.
+  - The local MySQL schema was upgraded to the new Alembic head after the
+    initially missing column caused the reported lead-list 500; an authenticated
+    lead-list load then returned 500 rows without server-error notifications.
+  - Authenticated browser QA confirmed the adjacent `导出 Word` / `导出 PDF`
+    actions on desktop and 390x844, and `返回线索列表` restored the list. The
+    safe worker QA additionally mocked queued prepare, polling and automatic
+    download plus the 422 error path. No real prepare or email was triggered.
+- Findings: none remaining. PDF export is customer-facing, content-preserving,
+  asynchronous and email-free, while the reported local schema outage is fixed.
+- Residual risk: no new real LibreOffice PDF was generated during this review;
+  the existing renderer suite and exact-byte/parser-valid tests passed. Durable
+  work may outlive the roughly two-minute frontend polling timeout.
+- Safety: no production data, real email, external research, AI regeneration,
+  deployment, stage, commit, reset or deletion was performed.
+- Next action: accept I-225, release TURN-0038 and return to idle I-060 state.
+
+PASS
+
+## REWORK-I-224-1
+
+- Task: I-224
+- Reviews: DEV-I-224-1 and TURN-0036 handoff
+- Timestamp: 2026-09-16T22:02:00+08:00
+- Passing evidence: independent `npm run build` passed with 1591 modules and
+  exit 0. The company list has no `组织诊断` heading, its one-row wrapper is 86px,
+  its section is 235px, and the document is 1280/1280 with no overflow.
+- Finding: authenticated one-row company-detail QA measured the answer wrapper
+  at 86px and pagination y=190, but `.organization-company-detail` remained
+  672px tall. The selected section's `flex: 1 1 auto` leaves roughly 430px of
+  bordered white blank space beneath pagination.
+- Required repair: make the selected company-detail card shrink to its content
+  on desktop while preserving long-table scrolling, mobile reachability,
+  navigation and all business bindings. Rebuild and report exact results.
+- Safety: no backend, data, export, deployment, email, commit or reset action.
+
+REWORK
+
+## REWORK-I-220-1
+
+- Task: I-220
+- Reviews: DEV-I-220-1 and TURN-0031 handoff
+- Timestamp: 2026-09-16T16:04:00+08:00
+- Inspected paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  the TURN-0031 handoff and development-log marker.
+- Independent verification: `npm run build` passed (`1591` modules, exit 0).
+  Authenticated browser QA passed at 1280x720 and 1024x768 with no document
+  horizontal overflow; the desktop table fills the remaining card height and
+  pagination stays at the bottom.
+- Finding: at 390x844, `.organization-admin-page` starts at y=50 and ends at
+  y=866 inside the 844px-clipped `.admin-shell`. Its own scroll reaches the
+  maximum (`scrollTop=199`) while pagination still ends at y=866, leaving the
+  bottom controls partially clipped and unreachable. Screenshot evidence:
+  `.playwright-cli/page-2026-09-16T08-03-36-426Z.png`.
+- Required repair: within the leased component only, constrain the selected
+  organization page to the actual mobile content viewport so its internal
+  scrolling can reveal the entire pagination. Preserve desktop/table behavior
+  and all business bindings. Rebuild and report exact results.
+
+REWORK
+
+## REV-I-220-2
+
+- Task: I-220
+- Reviews: REWORK-I-220-1-LANDING, DEV-I-220-2 and TURN-0032 handoff
+- Timestamp: 2026-09-16T16:10:00+08:00
+- Inspected paths: the organization admin component, both I-220 handoffs and
+  both development records.
+- Independent verification:
+  - `npm run build` passed after the repair: `vue-tsc --noEmit && vite build`,
+    1591 modules transformed, exit 0.
+  - Authenticated 1280x720 browser QA: document 1280/1280, detail card y=24 to
+    696, table height 341.97px, pagination y=626 to 679, no overflow.
+  - Authenticated 1024x768 browser QA: document 1024/1024, filters wrapped, the
+    820px table remained available through its own horizontal scroller.
+  - Authenticated 390x844 browser QA after repair: document 390/390; selected
+    page y=50 to 844 with scrollTop/max both 221; complete pagination y=760.06
+    to 844.06 and its buttons were visibly reachable at the scroll endpoint.
+  - Existing filter models, submit/export/back/view handlers and pagination
+    handlers remain unchanged by source inspection.
+- Findings: none remaining within I-220. The only console error was the expected
+  initial anonymous `/api/admin/me` 401 before local development login.
+- Safety: no backend tests were needed for this frontend-only behavior-preserving
+  change. No production data, export, deployment, email, stage, commit, reset or
+  deletion was performed.
+- Next action: accept I-220, release TURN-0032 and return the run to idle I-060
+  final-regression state.
+
+PASS
+
+## REV-I-210-2
+
+- Task: I-210
+- Reviews: REWORK-I-210-1, DEV-I-210-2 and TURN-0030 handoff
+- Timestamp: 2026-09-04T18:55:00+08:00
+- Independent verification:
+  - Reproduced original traceback before repair: MySQL 1054 unknown
+    `report_delivery_jobs.queue_state` while loading lead 1450.
+  - Local development MySQL was upgraded successfully by
+    `scripts/migrate_database.py`; `alembic current` now reports
+    `c8e1f4a7b203 (head)` and all queue/task columns are present.
+  - The real service call and FastAPI TestClient route for `/api/admin/leads/1450`
+    both return successfully (HTTP 200 for the route).
+  - Detail/migration focused tests: 9 passed; complete backend suite: 272 passed;
+    compileall and global diff-check passed.
+  - Migration review confirms both a4 and c8 adopt pre-created tables/columns/
+    indexes without overwriting data; detail tests cover complete, no-report,
+    no-delivery, malformed optional JSON and missing dimension-module rows.
+- Findings: none. Existing frontend was not modified; no 500 was hidden.
+- Next action: accept I-210, release TURN-0030 and leave I-060 as the final
+  read-only regression milestone. No production data, deployment, email, stage,
+  commit or push was used.
+
+PASS
+
+## REWORK-I-210-1
+
+- Task: I-210
+- Development record: DEV-I-210-1 / TURN-0029 handoff
+- Timestamp: 2026-09-04T18:35:00+08:00
+- Evidence: local MySQL was successfully upgraded to `c8e1f4a7b203`, and the
+  reproduced 1450 detail now returns 200. During review, `init_db()` inspection
+  showed development `Base.metadata.create_all()` can pre-create
+  `task_kind/task_context_json`; the c8 migration still unconditionally adds
+  those columns and would then fail with MySQL 1060 on a fresh legacy adoption.
+- Required repair: expand the lease to include
+  `backend/migrations/versions/c8e1f4a7b203_add_report_queue_task_kinds.py` and
+  migration tests. Make c8 adopt pre-existing columns/indexes safely while
+  preserving defaults/data. Add deterministic coverage for a pre-created task
+  column table and rerun focused/full tests, compileall and diff-check.
+- Do not change frontend or swallow detail errors. End with a new complete
+  READY_FOR_REVIEW handoff.
+
+REWORK
+
+## REV-I-190-1
+
+- Task: I-190
+- Reviews: DEV-I-190-3 and TURN-0027 handoff
+- Timestamp: 2026-08-28T18:35:00+08:00
+- Inspected paths: public/admin report endpoints, FastAPI startup, report task
+  model and migrations, queue repository/scheduler/worker, submission and lead
+  orchestration, customer-delivery status queries, architecture documentation,
+  and all focused tests named by the issue.
+- Independent verification:
+  - Focused scheduler/claim/HTTP/submission/lead/PDF/migration suites: 97 passed
+    in 21.14 seconds.
+  - Complete backend suite: 263 passed in 30.85 seconds; only existing
+    dependency deprecation warnings.
+  - Alembic reports exactly one head: `c8e1f4a7b203`.
+  - Global `git diff --check`: exit 0 with line-ending notices only.
+  - Source inspection confirms HTTP handlers only persist typed tasks; FastAPI
+    does not start a consumer; the independent worker uses database-global
+    processing/PDF limits, pause settings, leases, retries and promotion.
+  - Customer delivery queries ignore research/content-only tasks, preserving
+    completed delivery status after later administrator work.
+- Findings: none within I-190. Administrator settings and queue-management API/UI
+  remain intentionally deferred to I-200. Deployment process wiring remains a
+  later acceptance item and was not performed.
+- Next action: accept I-190, release TURN-0027 and schedule I-200. No live
+  database/service, customer data, external calls, email, deployment, stage,
+  commit or push was used.
+
+PASS
+
 ## REV-I-150-2
 
 - Task: I-150
@@ -556,5 +738,280 @@ PASS
 - Next action: accept I-170 and release TURN-0025. No production/customer-data
   access, live external call, real email, deployment, stage, commit or push was
   performed.
+
+PASS
+
+## REV-I-180-1
+
+- Task: I-180
+- Reviews: DEV-I-180-2 and TURN-0026 handoff
+- Timestamp: 2026-08-28T18:10:00+08:00
+- Inspected paths: queue/settings models and exports, scheduler repositories and
+  service, Alembic revision `a4d7c9e2f601`, scheduler tests and migration tests.
+- Independent verification:
+  - Scheduler plus migration focused suites: 13 passed in 14.80 seconds.
+  - Complete backend suite: 261 passed in 31.85 seconds; ten existing Pydantic
+    deprecation warnings only.
+  - Alembic reports exactly one head: `a4d7c9e2f601`.
+  - Compileall and scoped diff checks exited 0.
+  - Source/test inspection confirms defaults 2/50/200/1, settings-row locking,
+    exact 251-task distribution 50/200/1, approved priority, capacity bounds,
+    no auto-release of manual review, cancellation, and safe legacy backfill.
+- Findings: none within the intentionally disconnected domain phase. HTTP and
+  worker integration remains the next issue.
+- Next action: accept I-180 and release TURN-0026. No live database/service,
+  customer data, email, deployment, stage, commit or push was used.
+
+PASS
+
+## REV-I-190-2
+
+- Task: I-190
+- Reviews: REV-I-190-1, DEV-I-190-3 and TURN-0027 handoff
+- Timestamp: 2026-08-28T18:36:00+08:00
+- Findings and verification: fully recorded in `REV-I-190-1`. Focused tests
+  passed 97/97, the complete backend passed 263/263, Alembic has the single
+  `c8e1f4a7b203` head, global diff-check passed, and direct source inspection
+  confirmed Web isolation plus database-global processing/PDF limits.
+- Record repair: `REV-I-190-1` was appended after an earlier terminal marker
+  instead of the absolute log end. It remains unchanged under the append-only
+  rule; this landing record supplies the authoritative endpoint.
+- Next action: I-190 is accepted, TURN-0027 is released, and I-200 may begin.
+  No deployment, production access, external call, real email, stage, commit or
+  push was performed.
+
+PASS
+
+## REV-I-200-1
+
+- Task: I-200
+- Reviews: DEV-I-200-1 and TURN-0028 handoff
+- Timestamp: 2026-09-04T12:00:00+08:00
+- Inspected paths: administrator settings schemas, endpoint, service and
+  repository; queue scheduler integration; frontend API/types/composable/view/
+  styles; focused tests and coordination records.
+- Independent verification:
+  - Focused settings/scheduler/authorization tests: 30 passed in 17.12 seconds.
+  - Complete backend suite: 266 passed in 31.12 seconds; only dependency
+    deprecation warnings.
+  - `python -m compileall -q app tests`: exit 0.
+  - Alembic reports exactly one head: `c8e1f4a7b203`.
+  - Frontend `npm run build`: passed; 1579 modules transformed.
+  - Global `git diff --check`: exit 0 with LF/CRLF notices only.
+  - Source inspection confirms admin-only routes delegate validation and
+    transitions to the scheduler, require confirmation for concurrency increases,
+    audit all mutations, and expose counts/stages/transparent ETA/manual rows.
+  - Handoff records synthetic desktop/narrow browser QA with no page overflow,
+    validation and risk-confirmation behavior, refresh, batch/single approve and
+    reject, pause behavior, audit persistence and zero post-login console errors.
+- Findings: none within I-200. MySQL lock contention and live deployment remain
+  unverified by design; no production data or external services were used.
+- Next action: accept I-200 and release TURN-0028. I-060 remains the final
+  independent regression milestone; no deployment, stage, commit or push.
+
+PASS
+
+## REV-I-210-3
+
+- Task: I-210
+- Reviews: REWORK-I-210-1, DEV-I-210-2 and TURN-0030 handoff
+- Timestamp: 2026-09-04T18:58:00+08:00
+- Findings and verification: the original MySQL 1054 was reproduced; local
+  development migration now reaches `c8e1f4a7b203 (head)`, and `/api/admin/leads/1450`
+  returned HTTP 200 through FastAPI. Detail/migration focused tests passed 9/9,
+  complete backend passed 272/272, compileall and diff-check passed. Both a4 and
+  c8 migrations now adopt pre-created schema safely; incomplete detail rows are
+  covered without any frontend fallback or swallowed errors.
+- Record repair: `REV-I-210-2` was inserted after an earlier terminal marker;
+  this absolute-end landing record is authoritative under append-only rules.
+- Next action: I-210 is accepted and TURN-0030 is released. I-060 remains the
+  final read-only regression milestone. No production data, deployment, email,
+  stage, commit or push was used.
+
+PASS
+
+## REWORK-I-220-1-LANDING
+
+- Task: I-220
+- Reviews: DEV-I-220-1 and TURN-0031 handoff
+- Timestamp: 2026-09-16T16:05:00+08:00
+- Finding: the complete evidence is recorded in `REWORK-I-220-1`. At 390x844,
+  internal scrolling reached its maximum while the pagination still ended 22px
+  below the clipped viewport. Desktop build and 1280/1024 checks passed.
+- Required next action: TURN-0032 must constrain the selected organization page
+  to the actual mobile content viewport, keep all pagination reachable, preserve
+  desktop behavior and pass `npm run build`.
+- Record repair: the detailed record landed before the absolute log end; this
+  landing record is authoritative and earlier content remains unchanged.
+
+REWORK
+
+## REV-I-220-2-LANDING
+
+- Task: I-220
+- Reviews: REV-I-220-2, DEV-I-220-2 and TURN-0032 handoff
+- Timestamp: 2026-09-16T16:11:00+08:00
+- Verification: the detailed review in `REV-I-220-2` records the independent
+  passing build plus authenticated 1280x720, 1024x768 and repaired 390x844
+  browser evidence. The mobile pagination is fully reachable at maximum scroll,
+  document width does not overflow, desktop full-height behavior is preserved,
+  and source inspection found no business-handler changes.
+- Record repair: `REV-I-220-2` landed after an earlier `REWORK` marker instead
+  of the absolute log end. It remains unchanged; this landing record is the
+  authoritative final verdict.
+- Next action: I-220 is accepted, TURN-0032 is released, and coordination has
+  returned to idle I-060 final-regression state.
+
+PASS
+
+## REV-I-221-1
+
+- Task: I-221
+- Reviews: DEV-I-221-1 and TURN-0033 handoff
+- Timestamp: 2026-09-16T16:17:00+08:00
+- Independent verification:
+  - Source inspection confirms no `企业组织答卷` eyebrow or
+    `organization-summary` markup/selectors remain; company name, actions,
+    filters, table, pagination and handlers remain.
+  - `npm run build` passed: 1591 modules transformed, exit 0.
+  - Authenticated 1280x720 QA reports no document overflow, filter y=106,
+    table height 413px and pagination bottom y=679.
+  - Authenticated 390x844 QA reports document width 390/390, internal scroll
+    top/max 13/13 and fully reachable pagination y=760.06 to 844.06.
+- Findings: none. The two user-marked blocks are removed and the prior
+  responsive behavior remains intact.
+- Safety: no backend, production data, export, deployment, email, stage, commit,
+  reset or deletion was performed.
+- Next action: accept I-221, release TURN-0033 and return to idle I-060 state.
+
+PASS
+
+## REV-I-222-1
+
+- Task: I-222
+- Reviews: DEV-I-222-1 and TURN-0034 handoff
+- Timestamp: 2026-09-16T16:26:00+08:00
+- Independent verification:
+  - `npm run build` passed: 1591 modules transformed, exit 0.
+  - Source inspection confirms mutually exclusive list/detail branches, typed
+    close emit, parent `@close="closeSubmission"` wiring and preserved report
+    generation/download events.
+  - Authenticated desktop flow passed: company list -> company answer list ->
+    dedicated answer detail -> `返回答卷列表`; returning restored the same company
+    list and removed the detail. Sidebar `线索` navigation also switched normally.
+  - Authenticated 390x844 QA reports document width 390/390, detail present,
+    list absent and the return button visible near the top at y=134..174.
+- Findings: none. The original trapped appended-detail behavior is removed.
+- Safety: no backend, database, report generation, production data, export,
+  deployment, email, stage, commit, reset or deletion was performed.
+- Next action: accept I-222, release TURN-0034 and return to idle I-060 state.
+
+PASS
+
+## REV-I-223-1
+
+- Task: I-223
+- Reviews: DEV-I-223-1 and TURN-0035 handoff
+- Timestamp: 2026-09-16T21:54:00+08:00
+- Independent verification:
+  - `npm run build` passed: 1591 modules transformed, exit 0.
+  - Authenticated company-list request was
+    `/api/admin/organization/companies?has_submitted=true&page=1&page_size=10`
+    and the rendered page contained no input or select controls.
+  - Authenticated company-detail request included `status=submitted`; the page
+    contained no filter controls and exposed `导出已提交答卷`.
+  - Navigation passed from company list to submitted-answer list to answer
+    detail and back via `返回答卷列表` without losing the selected company.
+  - Authenticated 390x844 QA reported document width 390/390, zero filter
+    inputs, and visible export/back actions; no document-level overflow.
+- Findings: none. Both organization-diagnosis filter bars are removed and the
+  remaining company, answer and export behavior is submitted-only.
+- Safety: no backend, database, historical data, lead-PDF, production data,
+  deployment, email, stage, commit, reset or deletion was performed.
+- Next action: accept I-223, release TURN-0035 and return to idle I-060 state.
+
+PASS
+
+## REWORK-I-224-1-LANDING
+
+- Task: I-224
+- Reviews: REWORK-I-224-1, DEV-I-224-1 and TURN-0036 handoff
+- Timestamp: 2026-09-16T22:03:00+08:00
+- Finding: the full evidence is recorded in `REWORK-I-224-1`. The company list
+  is compact and the title is removed, but the selected company detail card
+  remains 672px tall around an 86px one-row table, leaving roughly 430px of
+  bordered white blank space after pagination because of `flex: 1 1 auto`.
+- Required next action: TURN-0037 must make that detail card content-height on
+  desktop while preserving long-list and mobile behavior.
+- Record repair: the detailed record landed before the absolute log end; this
+  landing record is authoritative and the earlier record remains unchanged.
+
+REWORK
+
+## REV-I-224-2
+
+- Task: I-224
+- Reviews: REWORK-I-224-1-LANDING, DEV-I-224-2 and TURN-0037 handoff
+- Timestamp: 2026-09-16T22:06:00+08:00
+- Independent verification:
+  - `npm run build` passed: 1591 modules transformed, exit 0.
+  - Authenticated 1280x720 company-list QA found no visible `组织诊断` heading;
+    its one-row table wrapper was 86px, section 235px, and Refresh remained.
+  - Authenticated one-row company-detail QA measured the answer wrapper at 86px
+    and the repaired card at 236px, down from 672px. Pagination ended at y=243
+    and the card at y=260, leaving only the intended 17px inner spacing.
+  - Authenticated 390x844 QA reported document width 390/390, compact 395px
+    detail card, visible export/back actions and reachable pagination.
+- Findings: none remaining. Both organization list views now shrink to actual
+  content and the redundant list heading is removed.
+- Safety: no backend, database, lead-PDF, production data, deployment, email,
+  stage, commit, reset or deletion was performed.
+- Next action: accept I-224, release TURN-0037 and return to idle I-060 state.
+
+PASS
+
+## REV-I-225-1-LANDING
+
+- Task: I-225
+- Reviews: REV-I-225-1, DEV-I-225-1, DEV-I-225-2 and TURN-0038 handoff
+- Timestamp: 2026-09-17T16:23:38+08:00
+- Verdict: the full independent verification and PASS evidence is recorded in
+  `REV-I-225-1`. This landing record is authoritative because that complete
+  append-only record was inserted beside an earlier PASS rather than at the
+  absolute end of this log.
+- Findings: none remaining. The customer-facing PDF export and the local schema
+  repair passed focused, full-suite, build, migration and authenticated browser
+  verification without triggering a real export or email.
+- Next action: I-225 is accepted, TURN-0038 is released, and protocol state is
+  idle on I-060.
+
+PASS
+
+## REV-I-226-1
+
+- Task: I-226
+- Reviews: DEV-I-226-1, DEV-I-226-2 and TURN-0039 handoff
+- Timestamp: 2026-09-18T14:41:30+08:00
+- Independent verification:
+  - Inspected the local supervisor, focused subprocess-boundary tests and both
+    startup documentation changes.
+  - The launcher uses the active Python interpreter, starts Uvicorn and the
+    report worker as separate children, prefixes output, fails visibly when a
+    child exits, and cleans up the remaining child with kill escalation.
+  - `--dry-run` printed the API and worker commands and confirmed that it started
+    no child process.
+  - Focused launcher suite passed 6 tests; compileall passed; complete backend
+    regression passed 304 tests with only existing dependency warnings.
+  - Scoped diff-check passed. Docker Compose, deployment configuration,
+    application code, database schema and frontend were outside the lease and
+    were not changed by TURN-0039. The already-dirty Docker file predates it.
+- Findings: none. Local developers now have one backend command while API and
+  worker remain process-isolated and production Docker startup is unchanged.
+- Residual risk: the live supervisor was not launched during review because an
+  existing real PDF-export task is queued; process lifecycle is covered at the
+  subprocess boundary instead.
+- Safety: no real queue task, email, Docker service, deployment, production data,
+  stage, commit, reset or deletion was performed.
+- Next action: accept I-226, release TURN-0039 and return to idle I-060 state.
 
 PASS

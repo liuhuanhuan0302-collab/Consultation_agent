@@ -59,7 +59,12 @@ def authorization_app():
         submission = DiagnosisSubmission(lead_id=lead.id)
         db.add(submission)
         db.flush()
-        report = Report(submission_id=submission.id, title="Report", html_content="<p>ok</p>")
+        report = Report(
+            submission_id=submission.id,
+            title="Report",
+            html_content="<p>ok</p>",
+            status="generated",
+        )
         db.add(report)
         db.commit()
         disabled_id = disabled.id
@@ -140,6 +145,19 @@ def test_admin_only_real_route_matrix(authorization_app):
         assert response.status_code == (200 if role == Role.admin else 403)
 
 
+def test_report_queue_management_is_admin_only(authorization_app):
+    client, users, _disabled_id, _unknown_role_id, _report_id = authorization_app
+    paths = (
+        "/api/admin/system-settings/report-queue",
+        "/api/admin/system-settings/report-queue/overview",
+    )
+    for path in paths:
+        assert client.get(path).status_code == 401
+        for role in Role:
+            response = client.get(path, headers=bearer(token_for(users[role.value])))
+            assert response.status_code == (200 if role == Role.admin else 403)
+
+
 def test_content_manager_real_route_matrix(authorization_app):
     client, users, _disabled_id, _unknown_role_id, _report_id = authorization_app
     payload = {
@@ -171,6 +189,24 @@ def test_lead_exporter_real_route_matrix(authorization_app):
         response = client.get("/api/admin/leads/export", headers=bearer(token_for(users[role.value])))
         expected = 200 if role in {Role.admin, Role.operator, Role.sales} else 403
         assert response.status_code == expected
+
+
+def test_lead_pdf_export_route_matrix(authorization_app):
+    client, users, _disabled_id, _unknown_role_id, _report_id = authorization_app
+    prepare_path = "/api/admin/leads/1/export/pdf/prepare"
+    download_path = "/api/admin/leads/1/export/pdf"
+    assert client.post(prepare_path).status_code == 401
+    assert client.get(download_path).status_code == 401
+    for role in Role:
+        headers = bearer(token_for(users[role.value]))
+        prepare = client.post(prepare_path, headers=headers)
+        download = client.get(download_path, headers=headers)
+        if role in {Role.admin, Role.operator, Role.sales}:
+            assert prepare.status_code == 200
+            assert download.status_code == 409
+        else:
+            assert prepare.status_code == 403
+            assert download.status_code == 403
 
 
 def test_report_viewer_real_route_matrix(authorization_app):

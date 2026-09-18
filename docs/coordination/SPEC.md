@@ -109,6 +109,13 @@ URLs came from the real search response or that factual sections bind to sources
 - Maintain a broad questionnaire industry taxonomy and durable project operating
   notes in the authoritative AGENTS.md.
 
+### G9. Reuse the administrator layout for organization diagnosis detail
+
+- Align the organization company submission-list detail with the established
+  lead administration header, controls, table and pagination rhythm.
+- Preserve organization-diagnosis behavior, data and navigation while using the
+  available viewport consistently across desktop, tablet and mobile widths.
+
 ## Non-goals
 
 - A global `{code, message, data}` response rewrite.
@@ -207,7 +214,8 @@ delivery-state selection, deletion orchestration, and reusable SQL out of
 - Active generation or queued/processing delivery conflicts are rejected.
 - Failed candidate generation leaves the prior HTML, summary and recommendations
   usable; successful generation invalidates only the derived PDF status.
-- The action records an audit event and does not create or mutate delivery jobs.
+- The action records an audit event and creates a durable content-regeneration
+  task; it does not create or mutate a customer-delivery task.
 
 ### FR-09 Complete report consistency and delivery gate
 
@@ -226,6 +234,22 @@ delivery-state selection, deletion orchestration, and reusable SQL out of
   content generation.
 - Content-only AI regeneration must recover stale in-process reservations after
   crashes and fence late tasks so an older attempt cannot replace a newer one.
+- Report execution uses a database-backed three-tier queue with administrator
+  settings, atomic placement/promotion and explicit approval for manual-review
+  tasks; HTTP requests never own execution capacity.
+- An administrator-only System Settings module controls validated database
+  scheduler parameters at runtime and exposes queue counts, stages, approximate
+  drain time, plus audited single/batch manual approval and rejection.
+
+### FR-10 Organization company-detail layout
+
+- Only the company submission-list detail view changes; the company list and
+  individual submission detail remain unchanged.
+- The header follows lead detail, metrics become a compact summary, existing
+  filters and actions remain intact, and the table fills remaining height with
+  pagination at the bottom.
+- Responsive layout wraps below 1180px and remains usable as a single column
+  below 640px without changing API or business behavior.
 
 ## Architecture and safety requirements
 

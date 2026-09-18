@@ -40,18 +40,19 @@ python -m venv .venv
 .\\.venv\\Scripts\\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python scripts\\start_dev.py
 ```
 
-报告队列：`ENVIRONMENT=development` 时报告队列消费者会在 API 进程内自动启动（报告生成与邮件发送在后台持续消费队列）。如需按生产方式单独运行消费者进程：
+`start_dev.py` 使用当前激活的 Python 同时启动并监管两个独立子进程：
+FastAPI 开发服务器和报告队列 Worker。停止启动器会一并停止两者；任一子进程异常退出时，
+启动器会显示错误并关闭另一个进程。可用以下命令只检查实际启动命令，不启动服务：
 
 ```powershell
-cd backend
-.\\.venv\\Scripts\\Activate.ps1
-python scripts\\report_worker.py
+python scripts\\start_dev.py --dry-run
 ```
 
-两者可以并存——任务领取通过条件 UPDATE 原子完成，不会重复处理。
+如需排查问题，仍可在两个终端分别运行 `uvicorn app.main:app --reload` 和
+`python scripts\\report_worker.py`。API 进程本身不会内嵌报告消费者。
 
 诊断系统前端：
 
@@ -96,6 +97,9 @@ docker compose up -d --build
 ```
 
 后端容器启动时会先执行 `alembic upgrade head`，迁移成功后才启动 API。生产空库会由 Alembic 创建完整结构；没有版本记录的完整旧库会自动建立基线后执行增量迁移。部署前仍应先备份数据库。
+
+服务器部署方式没有因本地启动器而改变：Docker Compose 继续将 API 与报告 Worker
+作为独立服务启动，本地 `scripts/start_dev.py` 不参与容器启动。
 
 生产环境统一入口：
 

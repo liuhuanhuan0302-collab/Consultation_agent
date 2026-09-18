@@ -26,7 +26,7 @@ the real domain layout and call paths.
 
 ## M4 - Customer report delivery and final regression
 
-Issues: I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150, I-160, I-170, I-060
+Issues: I-080, I-090, I-100, I-110, I-120, I-130, I-140, I-150, I-160, I-170, I-180, I-190, I-200, I-226, I-060
 Outcome: customer PDF delivery reuses the internal Word final-report layout via
 LibreOffice with a controlled Chromium fallback; independent regression evidence,
 new reports use cautious AI-scene wording plus an immutable administrator-managed
@@ -39,3 +39,10 @@ regenerate validated AI report content without implicitly creating a PDF or
 sending email and without losing the prior report on failure; remaining
 unverified items, and an exact safe commit inventory are available.
 No commit or deployment is performed.
+
+## M5 - Organization diagnosis administrator layout
+
+Issues: I-220  
+Outcome: the organization company submission-list detail reuses the established
+lead administration layout, fills the available viewport, and remains responsive
+without changing business behavior. No commit or deployment is performed.

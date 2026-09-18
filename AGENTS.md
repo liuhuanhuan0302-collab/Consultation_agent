@@ -31,11 +31,19 @@ All backend changes must follow `backend/ARCHITECTURE.md`.
 - Customer email PDF must come from the customer DOCX. Windows local development
   may use an installed desktop converter; Ubuntu/Docker delivery uses
   LibreOffice. Never silently attach a different Chromium report layout.
+- Report execution is governed by the singleton database scheduler settings and
+  persistent queue tiers (`active`, `automatic_waiting`, `manual_review`,
+  `approved_waiting`). Placement/promotion mutations lock settings row 1;
+  manual-review tasks require explicit approval and never auto-release on
+  capacity increases.
 - Administrator AI-report regeneration is content-only. PDF generation and email
   delivery require a separate explicit action.
 - Content-only regeneration uses a conservative stale timeout plus a persisted
   generation-start lease fence: crashed attempts can be retriggered, while late
   tasks from an older process cannot overwrite a newer reservation.
+- HTTP endpoints only persist typed report tasks. The independent report worker
+  is the sole research, AI, PDF and email executor; database settings enforce
+  global processing/PDF concurrency even when multiple workers are started.
 - When an implementation changes an important architecture boundary, delivery
   safety rule, deployment dependency, authoritative output contract or operator
   recovery path, update this section in the same coordinated issue. Do not add

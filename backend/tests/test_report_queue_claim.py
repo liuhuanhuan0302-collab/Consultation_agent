@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import Base
-from app.models import CompanyLead, DiagnosisSubmission, Report, ReportDeliveryJob, ReportStatus
+from app.models import CompanyLead, DiagnosisSubmission, Report, ReportDeliveryJob, ReportQueueSetting, ReportStatus
 from app.service import report_queue
 from app.service.report_queue import (
     _reclaim_stale_jobs,
@@ -13,9 +13,9 @@ from app.service.report_queue import (
     _try_claim_job,
     claim_next_job,
     enqueue_report_delivery,
-    process_job_then_next,
     process_report_delivery_job,
 )
+from app.service.report_queue_scheduler import acquire_pdf_slot, finish_job
 from app.utils.time_utils import utc_now
 
 
@@ -41,6 +41,7 @@ def seed_queued_job(db: Session) -> ReportDeliveryJob:
         report_id=report.id,
         recipient_email="a@example.com",
         status="queued",
+        queue_state="active",
         run_after=utc_now() - timedelta(minutes=1),
     )
     db.add(job)
@@ -187,8 +188,6 @@ def test_report_generation_failure_is_requeued_with_backoff(monkeypatch):
     verify.close()
     db.close()
     engine.dispose()
-
-
 def test_report_generation_failure_exhausts_to_manual_review(monkeypatch):
     db, engine = create_db()
     job = seed_queued_job(db)
@@ -232,7 +231,84 @@ def test_claim_next_job_returns_none_when_already_claimed():
     engine.dispose()
 
 
-def test_claim_next_job_tries_the_next_candidate_after_a_race(monkeypatch):
+def test_database_global_processing_limit_and_pause_apply_across_sessions():
+    db, engine = create_db()
+    first = seed_queued_job(db)
+    second = ReportDeliveryJob(
+        lead_id=first.lead_id,
+        submission_id=first.submission_id,
+        report_id=first.report_id,
+        recipient_email="second@example.com",
+        status="queued",
+        queue_state="active",
+        run_after=utc_now() - timedelta(minutes=1),
+    )
+    db.add(second)
+    db.commit()
+    settings = ReportQueueSetting(id=1)
+    db.add(settings)
+    db.flush()
+    settings.processing_concurrency = 1
+    settings.active_queue_capacity = 2
+    db.commit()
+
+    worker_one = Session(engine)
+    worker_two = Session(engine)
+    claimed = claim_next_job(worker_one)
+    assert claimed is not None
+    assert claim_next_job(worker_two) is None
+
+    token = worker_one.get(ReportDeliveryJob, claimed.id).lock_token
+    assert finish_job(worker_one, claimed.id, token, status="sent") is True
+    settings = worker_two.get(ReportQueueSetting, 1)
+    settings.processing_paused = True
+    worker_two.commit()
+    assert claim_next_job(worker_one) is None
+    settings = worker_two.get(ReportQueueSetting, 1)
+    settings.processing_paused = False
+    worker_two.commit()
+    assert claim_next_job(worker_one).id == second.id
+    worker_one.close()
+    worker_two.close()
+    db.close()
+    engine.dispose()
+
+
+def test_database_global_pdf_slot_limit_across_sessions():
+    db, engine = create_db()
+    first = seed_queued_job(db)
+    second = ReportDeliveryJob(
+        lead_id=first.lead_id,
+        submission_id=first.submission_id,
+        report_id=first.report_id,
+        recipient_email="second@example.com",
+        status="processing",
+        queue_state="active",
+        processing_stage="report",
+        lock_token="second-token",
+        locked_at=utc_now(),
+    )
+    first.status = "processing"
+    first.processing_stage = "report"
+    first.lock_token = "first-token"
+    first.locked_at = utc_now()
+    db.add(second)
+    db.commit()
+
+    worker_one = Session(engine)
+    worker_two = Session(engine)
+    assert acquire_pdf_slot(worker_one, first.id, "first-token") is True
+    assert acquire_pdf_slot(worker_two, second.id, "second-token") is False
+    assert worker_two.get(ReportDeliveryJob, second.id).processing_stage == "waiting_pdf"
+    assert finish_job(worker_one, first.id, "first-token", status="sent") is True
+    assert acquire_pdf_slot(worker_two, second.id, "second-token") is True
+    worker_one.close()
+    worker_two.close()
+    db.close()
+    engine.dispose()
+
+
+def test_claim_next_job_orders_active_candidates_fifo():
     db, engine = create_db()
     first_job = seed_queued_job(db)
     second_job = ReportDeliveryJob(
@@ -241,27 +317,16 @@ def test_claim_next_job_tries_the_next_candidate_after_a_race(monkeypatch):
         report_id=first_job.report_id,
         recipient_email="b@example.com",
         status="queued",
+        queue_state="active",
         run_after=utc_now() - timedelta(minutes=1),
     )
     db.add(second_job)
     db.commit()
 
-    original_try_claim = report_queue._try_claim_job
-    calls = 0
-
-    def claim_as_competing_worker(session, job_id, now):
-        nonlocal calls
-        calls += 1
-        claimed = original_try_claim(session, job_id, now)
-        return False if calls == 1 else claimed
-
-    monkeypatch.setattr(report_queue, "_try_claim_job", claim_as_competing_worker)
-
     claimed = claim_next_job(db)
 
     assert claimed is not None
-    assert claimed.id == second_job.id
-    assert calls == 2
+    assert claimed.id == first_job.id
     db.close()
     engine.dispose()
 
@@ -377,112 +442,5 @@ def test_research_failure_moves_to_manual_review_after_retries(monkeypatch):
     assert persisted_report.research_status == "review"
     assert "待人工审核" in persisted_job.last_error
     verify.close()
-    db.close()
-    engine.dispose()
-
-
-def test_process_job_then_next_targets_this_job_first(monkeypatch):
-    db, engine = create_db()
-    older = seed_queued_job(db)
-    newer = ReportDeliveryJob(
-        lead_id=older.lead_id,
-        submission_id=older.submission_id,
-        report_id=older.report_id,
-        recipient_email="b@example.com",
-        status="queued",
-        run_after=utc_now() - timedelta(minutes=1),
-    )
-    db.add(newer)
-    db.commit()
-
-    processed: list[int] = []
-    next_calls: list[int] = []
-
-    async def fake_process(job_id: int) -> bool:
-        processed.append(job_id)
-        return True
-
-    async def fake_next() -> bool:
-        next_calls.append(1)
-        return False
-
-    monkeypatch.setattr(report_queue, "SessionLocal", lambda: Session(engine))
-    monkeypatch.setattr(report_queue, "process_report_delivery_job", fake_process)
-    monkeypatch.setattr(report_queue, "process_next_report_delivery", fake_next)
-
-    asyncio.run(process_job_then_next(newer.id))
-
-    # 即使存在更早的 queued 任务，也优先处理本次提交的任务
-    assert processed == [newer.id]
-    assert next_calls == [1]
-    db.close()
-    engine.dispose()
-
-
-def test_process_job_then_next_skips_job_already_taken_by_worker(monkeypatch):
-    db, engine = create_db()
-    job = seed_queued_job(db)
-    # 模拟持续运行的 worker 已抢先认领该任务
-    assert _try_claim_job(db, job.id, utc_now()) is True
-
-    processed: list[int] = []
-    next_calls: list[int] = []
-
-    async def fake_process(job_id: int) -> bool:
-        processed.append(job_id)
-        return True
-
-    async def fake_next() -> bool:
-        next_calls.append(1)
-        return False
-
-    monkeypatch.setattr(report_queue, "SessionLocal", lambda: Session(engine))
-    monkeypatch.setattr(report_queue, "process_report_delivery_job", fake_process)
-    monkeypatch.setattr(report_queue, "process_next_report_delivery", fake_next)
-
-    asyncio.run(process_job_then_next(job.id))
-
-    # 任务已被认领：不重复处理，仅继续消费队列
-    assert processed == []
-    assert next_calls == [1]
-    db.close()
-    engine.dispose()
-
-
-def test_process_job_then_next_respects_backoff(monkeypatch):
-    db, engine = create_db()
-    job = seed_queued_job(db)
-    # 模拟刚失败、计划 2 分钟后重试的任务
-    job.run_after = utc_now() + timedelta(minutes=2)
-    db.commit()
-
-    # 退避时间内的任务不能被原子认领
-    assert _try_claim_job(db, job.id, utc_now()) is False
-    db.refresh(job)
-    assert job.status == "queued"
-
-    processed: list[int] = []
-    next_calls: list[int] = []
-
-    async def fake_process(job_id: int) -> bool:
-        processed.append(job_id)
-        return True
-
-    async def fake_next() -> bool:
-        next_calls.append(1)
-        return False
-
-    monkeypatch.setattr(report_queue, "SessionLocal", lambda: Session(engine))
-    monkeypatch.setattr(report_queue, "process_report_delivery_job", fake_process)
-    monkeypatch.setattr(report_queue, "process_next_report_delivery", fake_next)
-
-    asyncio.run(process_job_then_next(job.id))
-
-    # 定向领取同样不能绕过退避：任务不被处理，状态与次数均不变
-    assert processed == []
-    assert next_calls == [1]
-    db.refresh(job)
-    assert job.status == "queued"
-    assert job.attempts == 0
     db.close()
     engine.dispose()

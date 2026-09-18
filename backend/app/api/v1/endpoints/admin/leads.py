@@ -3,15 +3,20 @@
 from datetime import date
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import CompanyLead, User
-from app.schemas import ExportBatchResponse, LeadDiagnosticEmailUpdate, LeadResponse, MessageResponse
+from app.schemas import (
+    ExportBatchResponse,
+    LeadDiagnosticEmailUpdate,
+    LeadPdfExportPrepareResponse,
+    LeadResponse,
+    MessageResponse,
+)
 from app.service import lead_service
-from app.service.report_queue import process_next_report_delivery
 from app.utils.auth import AdminOnly, LeadExporter, LeadViewer
 
 router = APIRouter()
@@ -161,7 +166,6 @@ def download_export_batch(
 async def update_lead_diagnostic_email(
     lead_id: int,
     payload: LeadDiagnosticEmailUpdate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(AdminOnly),
 ) -> MessageResponse:
@@ -169,8 +173,6 @@ async def update_lead_diagnostic_email(
         result = lead_service.update_diagnostic_email(db, user, lead_id, str(payload.email))
     except lead_service.LeadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.detail) from exc
-    if result.should_process_queue:
-        background_tasks.add_task(process_next_report_delivery)
     return MessageResponse(message=result.message)
 
 
@@ -189,6 +191,54 @@ def export_lead_word(lead_id: int, db: Session = Depends(get_db), user: User = D
         headers={
             "Content-Disposition": (
                 'attachment; filename="customer-detail.docx"; '
+                f"filename*=UTF-8''{quote(result.filename)}"
+            )
+        },
+    )
+
+
+@router.post(
+    "/api/admin/leads/{lead_id}/export/pdf/prepare",
+    response_model=LeadPdfExportPrepareResponse,
+)
+def prepare_lead_pdf_export(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(LeadExporter),
+) -> LeadPdfExportPrepareResponse:
+    """Queue customer DOCX→PDF conversion without delivery side effects."""
+
+    try:
+        result = lead_service.prepare_lead_pdf_export(db, user, lead_id)
+    except (lead_service.LeadNotFoundError, lead_service.LeadReportNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    except lead_service.LeadValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+    return LeadPdfExportPrepareResponse(status=result.status, message=result.message)
+
+
+@router.get("/api/admin/leads/{lead_id}/export/pdf")
+def download_lead_pdf_export(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(LeadExporter),
+) -> StreamingResponse:
+    """Stream only a validated customer PDF snapshot already stored by the worker."""
+
+    try:
+        result = lead_service.download_lead_pdf_export(db, user, lead_id)
+    except (lead_service.LeadNotFoundError, lead_service.LeadReportNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    except lead_service.LeadValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+    except lead_service.LeadConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    return StreamingResponse(
+        iter([result.document]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="customer-report.pdf"; '
                 f"filename*=UTF-8''{quote(result.filename)}"
             )
         },
@@ -239,7 +289,6 @@ def admin_delete_lead(lead_id: int, db: Session = Depends(get_db), user: User = 
 @router.post("/api/admin/leads/{lead_id}/research")
 def trigger_lead_research(
     lead_id: int,
-    background_tasks: BackgroundTasks,
     force: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(AdminOnly),
@@ -250,8 +299,6 @@ def trigger_lead_research(
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     except lead_service.LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc
-    if result.report_id is not None:
-        background_tasks.add_task(lead_service.run_company_research_task, result.report_id, result.force)
     return {"status": result.status, "message": result.message}
 
 
@@ -268,7 +315,6 @@ def trigger_lead_research(
 @router.post("/api/admin/leads/{lead_id}/resume-delivery", response_model=MessageResponse)
 async def resume_lead_report_delivery(
     lead_id: int,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(AdminOnly),
 ) -> MessageResponse:
@@ -278,15 +324,12 @@ async def resume_lead_report_delivery(
         raise HTTPException(status_code=404, detail=exc.detail) from exc
     except lead_service.LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc
-    if result.should_process_queue:
-        background_tasks.add_task(process_next_report_delivery)
     return MessageResponse(message=result.message)
 
 
 @router.post("/api/admin/leads/{lead_id}/retry-attachment-delivery", response_model=MessageResponse)
 async def retry_lead_report_attachment_delivery(
     lead_id: int,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(AdminOnly),
 ) -> MessageResponse:
@@ -300,8 +343,6 @@ async def retry_lead_report_attachment_delivery(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     except lead_service.LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc
-    if result.should_process_queue:
-        background_tasks.add_task(process_next_report_delivery)
     return MessageResponse(message=result.message)
 
 
@@ -311,7 +352,6 @@ async def retry_lead_report_attachment_delivery(
 @router.post("/api/admin/leads/{lead_id}/regenerate-report")
 def regenerate_lead_ai_report(
     lead_id: int,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(AdminOnly),
 ) -> dict:
@@ -323,11 +363,4 @@ def regenerate_lead_ai_report(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     except lead_service.LeadValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc
-    background_tasks.add_task(
-        lead_service.run_report_regeneration_task,
-        result.report_id,
-        result.user_id,
-        result.previous_status,
-        result.generation_started_at,
-    )
     return {"status": result.status, "message": result.message}

@@ -3,7 +3,7 @@ import inspect
 from types import SimpleNamespace
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException, Request
+from fastapi import HTTPException, Request
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -140,25 +140,51 @@ def test_archived_question_answers_are_removed_on_final_submit():
     engine.dispose()
 
 
-def test_queue_capacity_failure_makes_no_writes():
+def test_queue_capacity_exhaustion_persists_manual_review_instead_of_rejecting():
     db, engine, submission, answers = create_submission()
-    with pytest.raises(submission_service.SubmissionQueueCapacityError):
-        asyncio.run(
-            submission_service.submit_questionnaire(
-                db,
-                submission.id,
-                submission.lead.session_token,
-                answers,
-                user_agent=None,
-                ip_address=None,
-                max_pending_jobs=0,
-            )
+    from app.models import ReportQueueSetting
+
+    db.add(ReportQueueSetting(id=1, processing_concurrency=1, active_queue_capacity=1, automatic_wait_capacity=0, pdf_concurrency=1))
+    db.commit()
+    # Occupy the only active slot with an unrelated task.
+    blocker_lead = CompanyLead(company_name="占位企业")
+    db.add(blocker_lead)
+    db.flush()
+    blocker_submission = DiagnosisSubmission(lead_id=blocker_lead.id)
+    db.add(blocker_submission)
+    db.flush()
+    blocker_report = Report(
+        submission_id=blocker_submission.id,
+        title="占位报告",
+        html_content="",
+        status="pending",
+    )
+    db.add(blocker_report)
+    db.flush()
+    blocker = ReportDeliveryJob(
+        lead_id=blocker_lead.id,
+        submission_id=blocker_submission.id,
+        report_id=blocker_report.id,
+        recipient_email="blocker@example.com",
+        status="queued",
+        queue_state="active",
+    )
+    db.add(blocker)
+    db.commit()
+
+    result = asyncio.run(
+        submission_service.submit_questionnaire(
+            db,
+            submission.id,
+            submission.lead.session_token,
+            answers,
+            user_agent=None,
+            ip_address=None,
+            max_pending_jobs=0,
         )
-    db.refresh(submission)
-    assert submission.status == SubmissionStatus.draft.value
-    assert db.query(QuestionAnswer).count() == 0
-    assert db.query(Report).count() == 0
-    assert db.query(ReportDeliveryJob).count() == 0
+    )
+    queued = db.get(ReportDeliveryJob, result.delivery_job_id)
+    assert queued.queue_state == "manual_review"
     db.close()
     engine.dispose()
 
@@ -237,7 +263,7 @@ def request_with_session() -> Request:
     )
 
 
-def test_endpoint_schedules_worker_only_after_service_success(monkeypatch):
+def test_endpoint_returns_without_scheduling_in_process_work(monkeypatch):
     score = ScoreResponse(
         submission_id=7,
         total_score=5,
@@ -262,20 +288,16 @@ def test_endpoint_schedules_worker_only_after_service_success(monkeypatch):
         return submission_service.SubmissionResult(score=score, report=report, delivery_job_id=11)
 
     monkeypatch.setattr(submission_service, "submit_questionnaire", fake_submit)
-    background = BackgroundTasks()
     response = asyncio.run(
         public.submit_questionnaire(
             SubmitQuestionnaireRequest(answers=[]),
             request_with_session(),
-            background,
             SimpleNamespace(id=7),
             object(),
         )
     )
 
     assert response.report.id == 9
-    assert len(background.tasks) == 1
-    assert background.tasks[0].args == (11,)
 
 
 def test_endpoint_maps_domain_error_without_scheduling(monkeypatch):
@@ -283,19 +305,16 @@ def test_endpoint_maps_domain_error_without_scheduling(monkeypatch):
         raise submission_service.SubmissionConflictError("该问卷已提交，请等待报告生成完成")
 
     monkeypatch.setattr(submission_service, "submit_questionnaire", fake_submit)
-    background = BackgroundTasks()
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
             public.submit_questionnaire(
                 SubmitQuestionnaireRequest(answers=[]),
                 request_with_session(),
-                background,
                 SimpleNamespace(id=7),
                 object(),
             )
         )
     assert exc.value.status_code == 409
-    assert background.tasks == []
 
 
 @pytest.mark.parametrize(
@@ -303,7 +322,6 @@ def test_endpoint_maps_domain_error_without_scheduling(monkeypatch):
     [
         (submission_service.SubmissionNotFoundError("Submission not found"), 404),
         (submission_service.SubmissionValidationError("bad answers"), 422),
-        (submission_service.SubmissionQueueCapacityError("queue full"), 503),
     ],
 )
 def test_endpoint_maps_remaining_domain_errors(monkeypatch, error, status_code):
@@ -311,17 +329,14 @@ def test_endpoint_maps_remaining_domain_errors(monkeypatch, error, status_code):
         raise error
 
     monkeypatch.setattr(submission_service, "submit_questionnaire", fake_submit)
-    background = BackgroundTasks()
     endpoint = getattr(public.submit_questionnaire, "__wrapped__", public.submit_questionnaire)
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
             endpoint(
                 SubmitQuestionnaireRequest(answers=[]),
                 request_with_session(),
-                background,
                 SimpleNamespace(id=7),
                 object(),
             )
         )
     assert exc.value.status_code == status_code
-    assert background.tasks == []

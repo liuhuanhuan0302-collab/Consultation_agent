@@ -117,9 +117,6 @@ async def submit_questionnaire(
                 raise SubmissionConflictError("该问卷已提交，请等待报告生成完成")
             active_question_ids = submission_repo.get_active_question_ids(db)
             validate_complete_answers(db, answers, active_question_ids)
-            if submission_repo.count_pending_delivery_jobs(db) >= max_pending_jobs:
-                raise SubmissionQueueCapacityError("当前报告生成任务较多，请稍后再试")
-
             # 题库改版后草稿可能残留已归档题目的旧答案；评分读取全部历史
             # 答案，残留行会导致 Unknown question id 失败且无法通过重答清除，
             # 因此提交事务中先按权威题集清理，再落当前答案。

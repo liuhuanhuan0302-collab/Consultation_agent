@@ -19,6 +19,219 @@ Claude Code is the sole writer. Append only; never modify earlier records.
 
 READY_FOR_REVIEW
 
+## DEV-I-226-1
+
+- Task: I-226; Turn: TURN-0039; Attempt: 1.
+- Timestamp: 2026-09-18T14:38:33+08:00.
+- Permitted paths: `backend/scripts/start_dev.py`,
+  `backend/tests/test_start_dev.py`, `README.md`, `PROJECT_OVERVIEW.md`,
+  append-only `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0039-handoff.md`.
+- Changed paths: all permitted paths above. No forbidden path was written.
+- Summary: added a local-only supervisor that uses the active Python
+  interpreter to start Uvicorn and the independent report worker as distinct
+  child processes. It prefixes child output, reports unexpected exits, cleans
+  up the remaining child (with kill escalation), handles Ctrl+C, and provides a
+  non-mutating `--dry-run`. Local documentation now uses this one command and
+  explicitly preserves the separate production Docker API/worker contract.
+- Commands and exact results: `python -m pytest -q tests/test_start_dev.py`
+  passed, 6 tests in 0.04s; `python -m compileall -q scripts/start_dev.py
+  tests/test_start_dev.py` passed with no output; `python
+  scripts/start_dev.py --dry-run` exited 0 and printed the backend working
+  directory plus active-interpreter Uvicorn and report-worker commands, followed
+  by `no child processes were started`; complete `python -m pytest -q` passed,
+  304 tests / 93 warnings in 36.38s; scoped `git diff --check` exited 0 with only
+  Git's existing LF-to-CRLF working-copy notices.
+- Tests not run / unverified: no live launcher run was performed because that
+  would start the API and worker and could process a real queued report task;
+  no Docker deployment was run.
+- Known risks: process startup/cleanup is unit-tested at the subprocess boundary;
+  console and signal details can still vary by operating system. The launcher
+  intentionally remains a local developer command, not a production process
+  manager.
+- Safety: no Docker service, production/staging configuration, application
+  queue behavior, database, HTTP API, frontend, deployment, real task/email,
+  stage, commit, reset, deletion or production data access. `docker-compose.yml`
+  was already dirty at turn start and was not edited by this turn.
+- Requested next state: Codex independently reviews TURN-0039 and accepts I-226
+  only after rerunning the launcher checks and confirming deployment files were
+  not changed by this issue.
+
+READY_FOR_REVIEW
+
+## DEV-I-225-1
+
+- Task: I-225; Turn: TURN-0038; Attempt: 1.
+- Timestamp: 2026-09-17T16:17:49+08:00.
+- Permitted paths: the 19 paths in active `lease-turn-0038`, including the
+  lead-report backend/frontend implementation, focused tests, architecture
+  document, append-only development log and TURN-0038 handoff.
+- Changed paths: `backend/ARCHITECTURE.md`,
+  `backend/app/api/v1/endpoints/admin/leads.py`,
+  `backend/app/models/report.py`, `backend/app/repositories/lead_repo.py`,
+  `backend/app/schemas/__init__.py`, `backend/app/schemas/lead.py`,
+  `backend/app/service/lead_service.py`,
+  `backend/app/service/report_queue.py`,
+  `backend/migrations/versions/e3f7a9c2d501_store_customer_pdf_exports.py`,
+  `backend/tests/test_authorization_matrix.py`,
+  `backend/tests/test_customer_pdf_export.py`,
+  `backend/tests/test_migration_chain.py`,
+  `backend/tests/test_pdf_delivery_gate.py`, `frontend/src/App.vue`,
+  `frontend/src/api.ts`, `frontend/src/composables/useAdmin.ts`,
+  `frontend/src/types.ts`, this append-only log and the TURN-0038 handoff. No
+  forbidden path was written.
+- Summary: added nullable 16 MiB customer-PDF byte snapshots and migration;
+  added typed, email-free `pdf_export` tasks using the existing persistent
+  queue, processing/PDF limits, retries, tiers and lease fencing; normal mail
+  delivery now persists the exact bytes passed to the mail sender. Thin
+  LeadExporter prepare/download endpoints deduplicate active work, validate
+  stored PDFs, use customer-readable filenames and audit downloads. Detail
+  polling state is separate from customer delivery/lead-processing state.
+  Successful content regeneration clears the stale artifact and conflicts with
+  active PDF export. The lead detail now provides `导出 PDF`, immediate-ready
+  download or one-time prepare plus bounded polling/automatic download, duplicate
+  click prevention and timer cleanup. Mobile action wrapping keeps all actions
+  reachable without document overflow.
+- Commands and exact results: focused `pytest -q
+  tests/test_customer_pdf_export.py tests/test_pdf_delivery_gate.py
+  tests/test_authorization_matrix.py tests/test_migration_chain.py` from
+  `backend` passed, 31 passed / 22 warnings in 13.36s, exit 0. Full `pytest -q`
+  from `backend` passed, 298 passed / 24 warnings in 41.09s, exit 0.
+  `python -m compileall -q app tests; alembic heads` passed, exit 0, with sole
+  head `e3f7a9c2d501`. Final `npm run build` from `frontend` passed,
+  `vue-tsc --noEmit && vite build`, 1591 modules transformed, exit 0, Vite
+  completed in 3.85s. Codex separately reported successful local MySQL upgrade
+  from `c6f9a2d4e8b1` to `e3f7a9c2d501` and restored lead-list HTTP 200.
+- Browser QA: authenticated local Playwright check found both export buttons at
+  desktop width 1036 with document/body width 1036. Initial 390x844 check found
+  the new PDF button clipped; the leased `App.vue` header/action wrapping repair
+  was applied and retested: document/body width remained 390, Word occupied
+  x=205..337 and PDF x=58..178 on the next row. A mocked 422 prepare response
+  displayed `客户诊断报告尚未生成完成，暂无法导出 PDF`. A fully mocked safe
+  queued flow produced request sequence prepare 200 → detail poll 200 → PDF
+  download 200 and Playwright recorded automatic `lead-1450.pdf` download. No
+  real prepare endpoint, renderer or mail sender was invoked by browser QA.
+- Tests not run / unverified: no real LibreOffice artifact was generated in this
+  turn, so there was no new real PDF to render for visual inspection. Existing
+  renderer/layout coverage and focused valid-PDF parser tests passed. The sole
+  browser console error was the expected pre-login `/api/admin/me` 401 handled
+  by the login screen.
+- Known risks: persisted artifacts are limited to 16 MiB by the model/migration;
+  customer reports larger than that will fail closed at database persistence and
+  follow queue retry/manual-review behavior. Frontend polling times out after
+  roughly two minutes and asks the operator to retry later while queued work
+  continues safely.
+- Safety: no real email, research, AI regeneration, deployment, staging,
+  commit, reset, deletion or production access occurred. Browser queued/error
+  checks used request mocks; only authenticated read-only local detail/list
+  requests reached the backend.
+- Requested next state: Codex independently reviews TURN-0038 and accepts I-225
+  only after verifying the lease-fenced artifact transaction, endpoint contract,
+  final diff and recorded test/browser evidence.
+
+READY_FOR_REVIEW
+
+## DEV-I-210-2
+
+- Task: I-210; Turn: TURN-0029; this is the required absolute-end landing
+  marker. The complete implementation evidence is recorded in `DEV-I-210-1`.
+- Final results: configured local development MySQL upgraded successfully from
+  `3e7d1b9c5a20`; `alembic current` and `alembic heads` both report exactly
+  `c8e1f4a7b203 (head)`. Focused compatibility/migration suite: 52 passed;
+  complete backend suite: 271 passed; compileall and `git diff --check` exit 0.
+- Residual lease constraint: c8 task-kind migration was explicitly forbidden
+  in `lease-turn-0029`; no frontend, production data, email or deployment was
+  touched. Codex must decide whether to expand the lease for c8 idempotence.
+
+READY_FOR_REVIEW
+
+## DEV-I-210-1
+
+- Task: I-210
+- Attempt: 1 (TURN-0029 absolute-end implementation record)
+- Timestamp: 2026-09-04T18:30:00+08:00
+- Allowed paths: files leased by `lease-turn-0029`; no frontend or forbidden path changed.
+- Summary: a4 migration now adopts a pre-created `report_queue_settings` table,
+  adds only absent settings/job columns and indexes, preserves an existing
+  singleton row, seeds it only when missing, and adopts legacy runnable jobs
+  only when their queue state is null. Admin lead detail now tolerates absent
+  report/delivery/task rows, null queue metadata, malformed optional JSON and
+  dimension scores whose module row is missing. Added migration adoption and
+  detail compatibility regression coverage.
+- Commands and exact results: local development MySQL
+  `python scripts/migrate_database.py` exited 0; `python -m alembic current`
+  and `python -m alembic heads` both reported exactly
+  `c8e1f4a7b203 (head)`; focused suite (detail, lead service/tracking,
+  migration chain) `52 passed, 13 warnings in 18.26s`; complete backend
+  `271 passed, 15 warnings in 37.35s`; `python -m compileall -q app scripts`
+  exited 0; global `git diff --check` exited 0 (only LF/CRLF notices).
+- Tests not run / unverified: no production/customer data, deployment, commit,
+  stage or email. MySQL detail endpoint was not queried with customer data;
+  migration was run against the configured local development database.
+- Risks / follow-up: c8 task-kind migration remains unchanged because its path
+  is explicitly forbidden by the active lease; the local database did not
+  require duplicate task columns. If pre-created task-kind columns must also
+  be supported, Codex must expand the lease before changing c8.
+- Requested next state: Codex independently reviews the migration and detail
+  compatibility changes, then accepts or requests a lease-authorized repair.
+
+READY_FOR_REVIEW
+
+## DEV-I-190-1
+
+- Task: I-190
+- Attempt: 1 (TURN-0027)
+- Timestamp: 2026-08-28T18:22:12+08:00
+- Allowed paths: all paths in active `lease-turn-0027`, including the approved
+  mid-turn additions `backend/app/repositories/lead_repo.py`,
+  `backend/app/service/lead_status.py`, `backend/tests/test_lead_tracking.py`
+  and `backend/ARCHITECTURE.md`.
+- Changed paths: `backend/ARCHITECTURE.md`,
+  `backend/app/api/v1/endpoints/public.py`,
+  `backend/app/api/v1/endpoints/admin/leads.py`, `backend/app/main.py`,
+  `backend/app/models/report.py`, `backend/app/models/__init__.py`,
+  `backend/app/repositories/report_queue_repo.py`,
+  `backend/app/repositories/lead_repo.py`,
+  `backend/app/service/report_queue_scheduler.py`,
+  `backend/app/service/report_queue.py`,
+  `backend/app/service/submission_service.py`,
+  `backend/app/service/lead_service.py`, `backend/app/service/lead_status.py`,
+  `backend/migrations/versions/c8e1f4a7b203_add_report_queue_task_kinds.py`,
+  `backend/tests/test_submission_service.py`,
+  `backend/tests/test_lead_service.py`, `backend/tests/test_lead_tracking.py`,
+  `backend/tests/test_report_queue_claim.py`,
+  `backend/tests/test_migration_chain.py`, and
+  `backend/tests/test_report_queue_http_isolation.py`.
+- Summary: unified full delivery, research-only, content regeneration and
+  attachment delivery as persistent task kinds; every public/admin HTTP path
+  now only persists work, and FastAPI no longer starts a development consumer.
+  The independent worker dynamically supervises concurrent tasks while
+  settings-row-serialized claims enforce the database-global processing limit
+  and pause state across workers. PDF slot acquisition uses the same singleton
+  lock and records research/report/waiting-PDF/PDF/email stages. Retry, stale
+  recovery, heartbeat and queue/content lease fencing remain in force; retries
+  release processing capacity and exhaustion enters explicit manual review.
+  Customer-delivery queries filter out research/content tasks so completed lead
+  and public delivery status cannot regress. Capacity exhaustion persists work
+  in manual review instead of returning HTTP 503.
+- Commands and exact results: focused queue/HTTP/lead suites last passed `63
+  passed, 12 warnings in 4.27s`; complete backend suite last passed `263 passed,
+  12 warnings in 33.22s`; `python -m compileall -q backend/app backend/scripts`
+  exit 0; `python -m alembic -c alembic.ini heads` returned exactly
+  `c8e1f4a7b203 (head)`; migration-chain tests were included in the passing full
+  suite; final global `git diff --check` exit 0 (only Windows LF/CRLF notices).
+- Tests not run / unverified: no live MySQL contention, worker/search/model/
+  LibreOffice/SMTP process, customer or production data, deployment, staging,
+  commit or push.
+- Known risks: SQLite multi-session tests verify the global decisions
+  deterministically but cannot reproduce MySQL lock scheduling; production uses
+  the standard singleton `SELECT ... FOR UPDATE` boundary. Existing Pydantic
+  serializer and FastAPI `on_event` deprecation warnings remain unrelated.
+- Requested next state: Codex independently reviews TURN-0027 and accepts I-190
+  only after all acceptance conditions pass.
+
+READY_FOR_REVIEW
+
 ## DEV-I-170-1
 
 - Task: I-170
@@ -55,6 +268,64 @@ READY_FOR_REVIEW
   recoverable after the conservative timeout and late writers are fenced.
 - Requested next state: Codex independently reviews TURN-0025 and accepts I-170
   when all acceptance conditions pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-180-1
+
+- Task: I-180
+- Attempt: 1 (TURN-0026 persistent queue domain foundation)
+- Timestamp: 2026-08-28T17:54:38+08:00
+- Allowed paths: all paths in active `lease-turn-0026`.
+- Changed paths: `backend/app/models/report.py`,
+  `backend/app/models/system_setting.py`, `backend/app/models/__init__.py`,
+  `backend/app/repositories/report_queue_repo.py`,
+  `backend/app/repositories/system_setting_repo.py`,
+  `backend/app/service/report_queue_scheduler.py`,
+  `backend/migrations/versions/a4d7c9e2f601_add_report_queue_scheduler.py`,
+  `backend/tests/test_report_queue_scheduler.py`,
+  `backend/tests/test_migration_chain.py`, this append-only log, and
+  `docs/coordination/outbox/TURN-0026-handoff.md`.
+- Summary: added the persistent four-state queue classification, cancellation
+  lifecycle, checked singleton dynamic settings, safe legacy backfill and a
+  settings-row-serialized service/repository foundation for placement,
+  promotion, explicit approval and rejection. Manual review never auto-releases
+  and approved work is prioritized without capacity overflow. HTTP and worker
+  execution remain disconnected by issue design.
+- Commands and exact results: focused scheduler/migration tests `13 passed in
+  14.58s`; complete backend `261 passed, 10 warnings in 29.21s`;
+  `python -m compileall -q app tests` exit 0; Alembic reports the single head
+  `a4d7c9e2f601`; global `git diff --check` exit 0 with only LF/CRLF notices;
+  direct leased-path trailing-whitespace scan returned
+  `SCOPED_TRAILING_WHITESPACE_OK`.
+- Tests not run / unverified: no MySQL concurrency integration, live services,
+  production/customer data, email, deployment, stage, commit, push, deletion
+  or cleanup. SQLite cannot prove runtime row-lock contention.
+- Risks / blockers: no known defect within I-180. The new domain intentionally
+  does not change runtime execution until the subsequent HTTP/worker wiring
+  issue. `AGENTS.md` is orchestrator-owned; Codex should record this accepted
+  architecture boundary in its operating notes before landing the issue.
+- Requested next state: Codex independently reviews TURN-0026 and accepts I-180
+  when every acceptance condition passes.
+
+READY_FOR_REVIEW
+
+## DEV-I-190-2
+
+- Task: I-190
+- Attempt: 1 (TURN-0027 absolute-end append-only landing record)
+- Timestamp: 2026-08-28T18:22:12+08:00
+- Allowed and changed paths, implementation summary, exact commands, unverified
+  items and residual risks: recorded completely in `DEV-I-190-1` and
+  `docs/coordination/outbox/TURN-0027-handoff.md`. The generic patch anchor
+  placed `DEV-I-190-1` after an earlier terminal record; no earlier log content
+  was rewritten, removed or truncated. This landing marker is appended at the
+  absolute end.
+- Final evidence: complete backend `263 passed, 12 warnings in 33.22s`;
+  compileall exit 0; Alembic exactly `c8e1f4a7b203 (head)`; migration chain
+  passed in the full suite; global `git diff --check` exit 0.
+- Requested next state: Codex independently reviews TURN-0027 and accepts I-190
+  only after every acceptance condition passes.
 
 READY_FOR_REVIEW
 
@@ -1226,5 +1497,442 @@ READY_FOR_REVIEW
   the conservative stale threshold because execution remains in-process.
 - Requested next state: Codex independently reviews TURN-0025 and accepts I-170
   when all acceptance conditions pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-180-2
+
+- Task: I-180
+- Attempt: 1 (TURN-0026 absolute-end append-only landing record)
+- Timestamp: 2026-08-28T17:54:38+08:00
+- Allowed paths: all paths in active `lease-turn-0026`.
+- Changed paths and evidence: `DEV-I-180-1` and
+  `docs/coordination/outbox/TURN-0026-handoff.md` contain the complete leased
+  path list, implementation evidence and exact command results. The generic
+  patch anchor placed `DEV-I-180-1` after an earlier terminal record; it has
+  not been rewritten, removed or truncated. This complete landing record is
+  appended at the absolute end.
+- Summary: added four persistent queue states, lifecycle cancellation, checked
+  singleton settings, safe legacy backfill and settings-row-serialized
+  placement, promotion, explicit approval and rejection. Defaults distribute
+  251 sequential jobs as 50 active, 200 automatic waiting and 1 manual review;
+  manual tasks never auto-release and approved work has capacity-safe priority.
+- Commands and exact results: focused scheduler/migration tests `13 passed in
+  14.58s`; complete backend `261 passed, 10 warnings in 29.21s`;
+  `python -m compileall -q app tests` exit 0; Alembic has exactly head
+  `a4d7c9e2f601`; global `git diff --check` exit 0; final leased-path whitespace
+  scan returned `FINAL_SCOPED_TRAILING_WHITESPACE_OK`.
+- Tests not run / unverified: no MySQL contention integration, live services,
+  customer/production data, email, deployment, stage, commit, push, deletion
+  or cleanup. Runtime HTTP/worker wiring is intentionally a later issue.
+- Risks / blockers: no known I-180 defect. SQLite cannot prove MySQL row-lock
+  contention; the implementation uses a singleton `SELECT ... FOR UPDATE`
+  boundary and stable task-row locking. Codex must update its owned `AGENTS.md`
+  operating notes for this architecture boundary before landing I-180.
+- Requested next state: Codex independently reviews TURN-0026 and accepts I-180
+  when every acceptance condition passes.
+
+READY_FOR_REVIEW
+
+## DEV-I-190-3
+
+- Task: I-190
+- Attempt: 1 (TURN-0027 absolute-end append-only landing record)
+- Timestamp: 2026-08-28T18:22:12+08:00
+- Evidence: the complete permitted/changed path list, implementation summary,
+  exact commands, unverified items and residual risks are recorded in
+  `DEV-I-190-1`, `DEV-I-190-2` and
+  `docs/coordination/outbox/TURN-0027-handoff.md`. Earlier records were not
+  rewritten or truncated; this record supplies the required absolute-end
+  terminal marker.
+- Final results: complete backend `263 passed, 12 warnings in 33.22s`;
+  compileall exit 0; Alembic exactly `c8e1f4a7b203 (head)`; migration chain
+  passed; global `git diff --check` exit 0.
+- Requested next state: Codex independently reviews TURN-0027 and accepts I-190
+  only after every acceptance condition passes.
+
+READY_FOR_REVIEW
+
+## DEV-I-200-1
+
+- Task: I-200
+- Attempt: 1 (absolute-end append-only landing record; the turn spans two
+  Claude sessions — the first ended at the UI-acceptance step on an account
+  usage limit, this session completed acceptance and the final responsive fix)
+- Timestamp: 2026-08-28T19:12:00+08:00
+- Allowed paths: all paths in active `lease-turn-0028`.
+- Changed paths and evidence: `docs/coordination/outbox/TURN-0028-handoff.md`
+  contains the complete changed-path list, implementation summary, exact
+  command results, unverified items and risks. No forbidden path was edited.
+- Summary: administrator queue settings and queue management landed in the
+  System Settings page. GET/PUT settings and GET overview plus single/batch
+  approve/reject are admin-only, delegate all placement/promotion semantics
+  to the scheduler service, and write operation logs. The UI shows both
+  modules with tier/lifecycle/stage counts, a transparent ETA (explicitly
+  non-estimable when paused or without completed-job history), manual-review
+  rows with stable identifiers, and usable batch and single-row actions.
+  Increasing processing concurrency requires an explicit resource-risk
+  confirmation; invalid bounds return 422/409 without partial writes.
+- Commands and exact results: focused settings/scheduler/authz tests
+  `30 passed, 61 warnings in 12.97s`; complete backend
+  `266 passed, 63 warnings in 33.38s`; `python -m compileall -q app tests`
+  exit 0; Alembic exactly `c8e1f4a7b203 (head)`; `npm run build` passed
+  (vue-tsc + vite, 1579 modules, 3.90s); global `git diff --check` exit 0
+  with only LF/CRLF notices. Synthetic browser QA against a throwaway
+  QA-only database covered save validation, risk confirmation (decline
+  aborts with no request; accept persists with the confirmation flag),
+  refresh, batch approve (manual 3→1, selection cleared, capacity rules
+  preserved), batch reject with reason (terminal cancel, audit + persisted
+  reason), single-row approve, pause toggling with ETA switching to
+  `暂无可靠估算` and back, operation-log rows for every mutation, desktop
+  1280x800 and narrow 390x844 layouts with no page overflow, and 0 console
+  errors after login. QA found and fixed one responsive defect: grid items
+  defaulting to `min-width: auto` let the 900px review table overflow and be
+  clipped by `.admin-main`'s `overflow-x: hidden`; fixed with
+  `.system-settings-panel > * { min-width: 0; }` and re-verified internal
+  scrolling (client 329 / scroll 900, last column reachable at right 359 in
+  a 390 viewport).
+- Tests not run / unverified: no live services, customer/production data,
+  email, deployment, stage, commit or push. The repository has no Playwright
+  package; QA used the preview-pane browser against the synthetic backend.
+  MySQL row-lock contention remains unexercised on SQLite (unchanged I-180
+  lock path).
+- Risks / blockers: none known within I-200. The synthetic QA database and
+  seed script were removed after the run; no QA artifacts remain.
+- Requested next state: Codex independently reviews TURN-0028 and accepts
+  I-200 when every acceptance condition passes.
+
+READY_FOR_REVIEW
+
+## DEV-I-210-3
+
+- Task: I-210; Turn: TURN-0029; absolute-end landing marker. The complete
+  implementation evidence is recorded in `DEV-I-210-1` and `DEV-I-210-2`.
+- Final results: configured local development MySQL upgraded successfully from
+  `3e7d1b9c5a20`; `alembic current` and `alembic heads` both report exactly
+  `c8e1f4a7b203 (head)`; focused suite 52 passed; complete backend suite 271
+  passed; compileall and `git diff --check` exit 0.
+- Residual lease constraint: c8 task-kind migration was explicitly forbidden
+  by `lease-turn-0029`; no frontend, production data, email or deployment was
+  touched. Codex must decide whether to expand the lease for c8 idempotence.
+
+READY_FOR_REVIEW
+
+## DEV-I-210-4
+
+- Task: I-210; Turn: TURN-0030; absolute-end landing marker.
+- Summary: c8 task-kind migration now adopts pre-created `task_kind` and
+  `task_context_json` columns/index without duplicate DDL or value changes;
+  migration-chain coverage includes a preserved legacy attachment task.
+- Verification: focused migration chain `5 passed in 12.38s`; complete backend
+  `272 passed, 15 warnings in 38.95s`; compileall exit 0; `git diff --check`
+  exit 0. The already-upgraded local development MySQL was not downgraded.
+- Safety: no frontend, production/customer data, deployment, commit, stage or
+  email was touched. New handoff is
+  `docs/coordination/outbox/TURN-0030-handoff.md`.
+
+READY_FOR_REVIEW
+
+## DEV-I-220-1
+
+- Task: I-220; Turn: TURN-0031; Attempt: 1.
+- Timestamp: 2026-09-16T15:55:56+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  append-only `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0031-handoff.md`.
+- Changed paths: all three permitted paths above. The application component
+  was already untracked user work and was edited in place; no forbidden path
+  was written.
+- Summary: restyled only the selected-company submission-list view. Its header
+  now keeps the enterprise title at left and groups export then back actions at
+  right; the four large cards are one compact summary row; the filters retain
+  their existing fields and bindings; and the answer table flexes into the
+  remaining page height with pagination anchored below it. Component-scoped
+  breakpoints wrap the filters below 1180px and provide single-column controls,
+  wrapped actions and a stacked summary below 640px. The company list and
+  `OrganizationSubmissionDetail.vue` were not changed.
+- Commands and exact results: `npm run build` from `frontend` passed twice on
+  the resulting source. Final run: `vue-tsc --noEmit && vite build`, 1591
+  modules transformed, exit 0, Vite build completed in 5.59s. A scoped
+  PowerShell readback confirmed the new header/summary/full-height selectors,
+  both responsive breakpoints, and the existing filter/row/pagination handler
+  expressions in the owned component; exit 0. Scoped `git status --short`
+  reported the pre-existing modified development log and the pre-existing
+  untracked component, with no TURN-0031 handoff until this record was written.
+- Tests not run / unverified: no authenticated interactive browser session was
+  available, so pixel-level desktop/mobile visual QA was not run. No backend
+  tests were run because this is a component-only layout change with no backend
+  lease or behavior change.
+- Known risks: responsive behavior is compile-verified and statically reviewed
+  but still needs Codex's independent browser check at desktop, <=1180px and
+  <=640px. The data table intentionally retains its existing 820px minimum
+  width and scrolls inside its wrapper on narrow screens.
+- Safety: no stage, commit, reset, deletion, deployment, production/customer
+  data access, external call or email occurred.
+- Requested next state: Codex independently reviews TURN-0031 and accepts I-220
+  only after its visual and behavioral acceptance checks pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-220-2
+
+- Task: I-220; Turn: TURN-0032; Attempt: 2 (bounded responsive repair).
+- Timestamp: 2026-09-16T16:06:58+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  append-only `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0032-handoff.md`.
+- Changed paths: all three permitted paths above; no forbidden path was written.
+- Summary: repaired only the reviewed 390x844 pagination clipping. Within the
+  existing <=640px rule, the selected-company page now uses the actual mobile
+  content viewport (`100dvh - 50px`) and owns vertical scrolling, so content
+  below the fold, including the complete pagination, can be reached. The rule
+  is selected-company-only and mobile-only; desktop height/flex behavior,
+  table sizing, application state and handlers are unchanged.
+- Commands and exact results: final `npm run build` from `frontend` passed;
+  `vue-tsc --noEmit && vite build`, 1591 modules transformed, exit 0, Vite
+  build completed in 7.97s. Scoped source readback found the repair selector
+  only inside the <=640px media query; exit 0.
+- Tests not run / unverified: the worker did not have the reviewer's
+  authenticated browser session, so the 390x844 DOM-coordinate assertion and
+  1280x720 screenshot were not rerun locally. Codex retains the synthetic
+  browser setup that produced `REWORK-I-220-1` and should rerun it.
+- Known risks: the 50px subtraction intentionally matches the measured mobile
+  content origin in the review evidence. If the global mobile admin chrome
+  height changes later, this component-local constraint must change with it.
+- Safety: no stage, commit, reset, deletion, deployment, production/customer
+  data access, external call or email occurred.
+- Requested next state: Codex independently reruns the 390x844 and 1280x720
+  browser checks, then accepts I-220 only if the pagination is fully reachable,
+  document width remains 390px and desktop full-height behavior is preserved.
+
+READY_FOR_REVIEW
+
+## DEV-I-221-1
+
+- Task: I-221; Turn: TURN-0033; Attempt: 1.
+- Timestamp: 2026-09-16T16:13:52+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  append-only `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0033-handoff.md`.
+- Changed paths: all three permitted paths above; no forbidden path was written.
+- Summary: removed only the `企业组织答卷` eyebrow and the entire four-value
+  compact statistics row from the selected-company detail. Removed every
+  `organization-summary` selector, including its former 1180px, 900px and
+  640px adaptations. The company-name heading, export/back actions, filters,
+  table, pagination and the TURN-0032 mobile viewport scrolling rule remain.
+- Commands and exact results: a scoped absence check for `企业组织答卷`,
+  `organization-summary` and `class="eyebrow"` in the owned component passed
+  with no matches; exit 0. `npm run build` from `frontend` passed;
+  `vue-tsc --noEmit && vite build`, 1591 modules transformed, exit 0, Vite
+  build completed in 4.27s.
+- Tests not run / unverified: no authenticated browser visual check was run by
+  the worker. Codex should confirm the filter moves upward and the existing
+  1280x720 and 390x844 overflow/scroll acceptance remains satisfied.
+- Known risks: none known within the deletion-only scope; remaining visual risk
+  is limited to browser spacing verification.
+- Safety: no interaction/business changes, stage, commit, reset, deletion,
+  deployment, production/customer data access, external call or email occurred.
+- Requested next state: Codex independently reviews TURN-0033 and accepts I-221
+  only after build and desktop/mobile visual checks pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-222-1
+
+- Task: I-222; Turn: TURN-0034; Attempt: 1.
+- Timestamp: 2026-09-16T16:21:03+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  `frontend/src/components/OrganizationSubmissionDetail.vue`, append-only
+  `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0034-handoff.md`.
+- Changed paths: all four permitted paths above; no forbidden path was written.
+- Summary: the organization company answer list and selected answer are now
+  mutually exclusive views. Once detail data exists, the list is replaced by
+  `OrganizationSubmissionDetail`; its top header exposes a visible
+  `返回答卷列表` action that emits `close`, and the parent wires that event to the
+  existing `closeSubmission()`. That action clears only the selected answer and
+  detail error, so selected company, filters, loaded list and page are retained.
+  Existing generate/download props and events remain unchanged.
+- Commands and exact results: `npm run build` from `frontend` passed;
+  `vue-tsc --noEmit && vite build`, 1591 modules transformed, exit 0, Vite
+  completed in 4.94s. Scoped source readback confirmed the mutually exclusive
+  `selectedSubmission` branch, `close` emit and parent wiring, preserved report
+  events, and the unchanged two-assignment `closeSubmission()` implementation;
+  exit 0.
+- Tests not run / unverified: no authenticated browser visual/interaction run
+  was available to the worker. Codex should open an answer, confirm the list is
+  absent, exercise the top return button, and verify company/filter/page state
+  plus desktop/mobile overflow behavior.
+- Known risks: no known functional risk after type/build and wiring checks;
+  final confidence depends on the independent browser state-preservation test.
+- Safety: no API/backend/report-generation behavior, stage, commit, reset,
+  deletion, deployment, production/customer data access, external call or email.
+- Requested next state: Codex independently reviews TURN-0034 and accepts I-222
+  only after build and desktop/mobile interaction checks pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-223-1
+
+- Task: I-223; Turn: TURN-0035; Attempt: 1.
+- Timestamp: 2026-09-16T21:49:55+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  `frontend/src/composables/useOrganizationAdmin.ts`, append-only
+  `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0035-handoff.md`.
+- Changed paths: all four permitted paths above; no forbidden path was written.
+- Summary: removed the complete company and answer filter bars. Company list
+  requests now always send `has_submitted: true`; company answer list requests
+  and CSV export always send `status: "submitted"`. The export action is named
+  `导出已提交答卷`. Removed the now-dead filter/suggestion reactive state,
+  debounce lifecycle, handlers, returned properties and component-scoped CSS.
+  Pagination, refresh, both navigation levels and report actions are preserved.
+- Commands and exact results: scoped absence/readback checks confirmed no
+  deleted filter/suggestion references remain, all three fixed request
+  parameters are present, the new export label is present, and navigation,
+  pagination and report handler exports/bindings remain; exit 0. `npm run build`
+  from `frontend` passed: `vue-tsc --noEmit && vite build`, 1591 modules
+  transformed, exit 0, Vite completed in 4.34s.
+- Tests not run / unverified: no authenticated browser/API capture was available
+  to the worker. Codex should verify the actual company/detail/export requests
+  and desktop/mobile overflow against its synthetic browser environment.
+- Known risks: no known compile/static wiring risk. Backend filter capabilities
+  remain available but are intentionally no longer exposed on this page.
+- Safety: no backend, migration, schema, database, lead-PDF/export, stage,
+  commit, reset, deletion, deployment, production/customer data, external call
+  or email.
+- Requested next state: Codex independently reviews TURN-0035 and accepts I-223
+  only after fixed-request and desktop/mobile browser checks pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-224-1
+
+- Task: I-224; Turn: TURN-0036; Attempt: 1.
+- Timestamp: 2026-09-16T21:59:20+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  append-only `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0036-handoff.md`.
+- Changed paths: all three permitted paths above; no forbidden path was written.
+- Summary: removed the redundant `组织诊断` heading from the company list and
+  placed Refresh in a dedicated right-aligned action row. Removed the company
+  table's fixed/minimum height and the submitted-answer table's fill-remaining
+  flex/minimum height; both wrappers now size to rendered rows with a shared
+  maximum-height scroll boundary for long desktop result sets. Pagination now
+  follows the compact table. The prior mobile root scroll and navigation,
+  submitted-only export label, table columns and all handlers remain unchanged.
+- Commands and exact results: scoped readback confirmed the old heading is
+  absent, Refresh uses `organization-list-actions`, both table wrappers share
+  only a `max-height`, the <=640px wrappers remove that cap, and mobile scroll,
+  navigation and export bindings remain; exit 0. `npm run build` from `frontend`
+  passed: `vue-tsc --noEmit && vite build`, 1591 modules transformed, exit 0,
+  Vite completed in 3.89s.
+- Tests not run / unverified: no authenticated browser layout run was available
+  to the worker. Codex should inspect one-row company/answer sets and long lists
+  at desktop and 390x844, including reachable pagination and no document overflow.
+- Known risks: the desktop maximum-height boundary intentionally gives long
+  lists an internal scrollbar; short lists have no forced blank height.
+- Safety: no business binding, backend, composable, database, lead-PDF, stage,
+  commit, reset, deletion, deployment, production/customer data, external call
+  or email.
+- Requested next state: Codex independently reviews TURN-0036 and accepts I-224
+  only after compact-list and desktop/mobile browser checks pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-224-2
+
+- Task: I-224; Turn: TURN-0037; Attempt: 2 (bounded visual repair).
+- Timestamp: 2026-09-16T22:03:31+08:00.
+- Permitted paths: `frontend/src/components/OrganizationDiagnosisAdmin.vue`,
+  append-only `docs/coordination/DEVELOPMENT_LOG.md`, and
+  `docs/coordination/outbox/TURN-0037-handoff.md`.
+- Changed paths: all three permitted paths above; no forbidden path was written.
+- Summary: removed the selected-company detail card's sole desktop
+  `flex: 1 1 auto` override. The card now inherits the component's base
+  `flex: 0 0 auto` and shrinks around its header, rendered answer rows and
+  pagination. Long tables retain the shared maximum-height internal scrolling;
+  <=640px retains the existing page-level dvh scrolling and visible overflow.
+- Commands and exact results: scoped readback confirmed the desktop fill
+  selector is absent, the base card flex is `0 0 auto`, the shared long-table
+  `max-height` remains, and mobile `100dvh - 50px` scrolling/overflow remains;
+  exit 0. `npm run build` from `frontend` passed: `vue-tsc --noEmit && vite
+  build`, 1591 modules transformed, exit 0, Vite completed in 3.93s.
+- Tests not run / unverified: the worker did not have the authenticated browser
+  session used for `REWORK-I-224-1-LANDING`. Codex should repeat the 1280x720
+  one-row measurement and 390x844 pagination reachability check.
+- Known risks: none known within the single-selector repair; long-list and
+  mobile behavior depend on the preserved rules already browser-tested in the
+  preceding review.
+- Safety: no business binding, backend, composable, database, lead-PDF, stage,
+  commit, reset, deletion, deployment, production/customer data, external call
+  or email.
+- Requested next state: Codex independently reviews TURN-0037 and accepts I-224
+  only after desktop card-height and mobile reachability checks pass.
+
+READY_FOR_REVIEW
+
+## DEV-I-225-2
+
+- Task: I-225; Turn: TURN-0038; Attempt: 1; log-position correction only.
+- Timestamp: 2026-09-17T16:17:49+08:00.
+- Permitted and changed paths: same 19 leased paths enumerated in the complete
+  `DEV-I-225-1` record. No application, test or documentation content changed
+  between that record and this terminal marker; this record exists because the
+  prior complete record was accidentally inserted after an earlier marker
+  instead of at the absolute end of this append-only file.
+- Delivered behavior: persisted validated customer-PDF snapshots; typed,
+  lease-fenced and email-free `pdf_export` queue work; exact normal-delivery
+  byte persistence; LeadExporter prepare/download APIs with dedupe and audits;
+  regeneration invalidation; detail readiness/error polling state; frontend
+  one-click prepare/poll/automatic download, duplicate prevention and timer
+  cleanup; responsive desktop/mobile action layout.
+- Commands and exact results: focused backend suite 31 passed / 22 warnings in
+  13.36s; full backend suite 298 passed / 24 warnings in 41.09s; compileall
+  passed; Alembic reported sole head `e3f7a9c2d501`; final frontend build passed
+  with 1591 modules in 3.85s. Authenticated Playwright verified desktop and
+  390x844 without document overflow, clear mocked 422 feedback, and a safe
+  mocked prepare 200 → poll 200 → automatic PDF download 200 flow.
+- Unverified and risks: no new real LibreOffice PDF was generated for visual
+  inspection; storage is capped at 16 MiB; frontend polling times out after
+  roughly two minutes while durable queue work continues. Existing renderer
+  tests and parser-valid focused PDF tests passed.
+- Safety: no real email, external research, AI regeneration, production access,
+  deployment, stage, commit, reset or deletion. Browser mutation paths were
+  mocked.
+- Requested next state: Codex independently reviews TURN-0038 and accepts I-225
+  after verifying the final diff and evidence. `DEV-I-225-2` is the authoritative
+  terminal marker; `DEV-I-225-1` remains intact as the complete implementation
+  record.
+
+READY_FOR_REVIEW
+
+## DEV-I-226-2
+
+- Task: I-226; Turn: TURN-0039; Attempt: 1; log-position correction only.
+- Timestamp: 2026-09-18T14:40:02+08:00.
+- Permitted and changed paths: same six leased paths enumerated in the complete
+  `DEV-I-226-1` record. No application, test or documentation content changed
+  between that record and this terminal marker; this correction exists because
+  the complete record was accidentally inserted after an earlier marker instead
+  of at the absolute end of this append-only file.
+- Delivered behavior: local-only active-interpreter supervisor for separate
+  Uvicorn and report-worker child processes, prefixed output, visible child-exit
+  failure, remaining-child cleanup with kill escalation, Ctrl+C cleanup, and a
+  non-mutating dry-run. Documentation preserves independent production Docker
+  startup.
+- Commands and exact results: focused launcher suite passed 6 tests in 0.04s;
+  compileall passed; dry-run exited 0 and printed both commands without starting
+  children; complete backend suite passed 304 tests / 93 warnings in 36.38s;
+  scoped diff check exited 0 with line-ending notices only.
+- Unverified and risks: no live launcher or Docker run, specifically to avoid
+  consuming a real queued task; OS console/signal variation remains possible.
+- Safety: no forbidden path, real task/email, deployment, production data,
+  stage, commit, reset or deletion. Pre-existing dirty `docker-compose.yml` was
+  not edited.
+- Requested next state: Codex independently reviews TURN-0039 and accepts I-226
+  after confirming the final diff and test evidence. `DEV-I-226-2` is the
+  authoritative terminal marker; `DEV-I-226-1` remains intact as the complete
+  implementation record.
 
 READY_FOR_REVIEW

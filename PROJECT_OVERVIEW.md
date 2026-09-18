@@ -27,7 +27,7 @@ E:\Consultation_agent\
 │   ├── requirements.txt
 │   ├── app/
 │   │   ├── main.py              # FastAPI 入口：CORS、限流、异常处理、启动校验；
-│   │   │                        #   development 环境在进程内启动报告队列 worker
+│   │   │                        #   不在 API 进程内执行报告队列任务
 │   │   ├── config.py            # 兼容再导出 → app.core.config
 │   │   ├── database.py          # 兼容再导出 → app.db
 │   │   ├── seed.py              # 初始数据：管理员、正式题库、案例、渠道
@@ -77,7 +77,7 @@ E:\Consultation_agent\
 │   │   └── data/
 │   │       └── official_questionnaire.json  # 正式题库（10 模块 68 题）
 │   ├── migrations/versions/     # Alembic：initial、normalize_legacy_schema、add_lead_city、default_search_to_deepseek
-│   ├── scripts/                 # report_worker.py、import_questionnaire.py、migrate_database.py 等
+│   ├── scripts/                 # start_dev.py、report_worker.py、import_questionnaire.py 等
 │   └── tests/                   # 23 个测试文件（角色矩阵、企业情报证据、答卷服务、投递闸门等）
 │
 ├── frontend/
@@ -312,7 +312,7 @@ POST /submit（端点：会话归属、限流、HTTP 映射、后台任务调度
 docker compose up -d --build
 ```
 
-后端容器启动时先执行 `alembic upgrade head`，迁移成功后才启动 API；生产空库由 Alembic 创建完整结构。报告队列在生产环境作为独立 worker 进程运行（`scripts/report_worker.py`），development 环境在 API 进程内自动启动消费者。
+后端容器启动时先执行 `alembic upgrade head`，迁移成功后才启动 API；生产空库由 Alembic 创建完整结构。报告队列在生产环境作为独立 worker 进程运行（`scripts/report_worker.py`）。本地统一启动器不参与服务器或容器启动，生产部署方式保持不变。
 
 > 本文档未重新执行 Docker 部署验证；部署细节以 `DEPLOY_SERVER.md` 与 `docker-compose.yml` 当前内容为准。
 
@@ -327,7 +327,10 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python scripts\\start_dev.py
+
+# 仅打印将启动的 API 与 Worker 命令，不创建进程
+python scripts\\start_dev.py --dry-run
 
 # 前端
 cd frontend
@@ -339,3 +342,6 @@ npm run dev
 # 后台   http://localhost:5173/admin
 # 测试   cd backend && pytest
 ```
+
+本地统一启动器会用当前 Python 分别启动 Uvicorn 和 `scripts/report_worker.py`，
+两者仍是相互隔离的子进程。任一进程异常退出或按 Ctrl+C 停止启动器时，另一个进程也会被清理。

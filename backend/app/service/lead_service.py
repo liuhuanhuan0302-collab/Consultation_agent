@@ -21,6 +21,7 @@ from app.models.report import (
     ReportDeliveryStatus,
     ReportFileStatus,
     ReportStatus,
+    ReportTaskKind,
 )
 from app.models.user import User
 from app.repositories import lead_repo
@@ -31,8 +32,14 @@ from app.service.api_gateway_service import effective_search_config
 from app.service.company_research import research_company, validate_structured_research
 from app.service.lead_export_service import generate_lead_export_docx
 from app.service.lead_status import sync_lead_processing_status
+from app.service.pdf_service import (
+    ReportPdfValidationError,
+    customer_report_filename,
+    validate_report_pdf_bytes,
+)
 from app.service.report_content import build_report_presentation_html
 from app.service.report_queue import enqueue_report_delivery
+from app.service.report_queue_scheduler import place_delivery_job_in_transaction
 from app.service.reporting import (
     apply_report_candidate,
     generate_report_candidate,
@@ -46,6 +53,22 @@ logger = logging.getLogger(__name__)
 REPORT_REGENERATION_STALE_TIMEOUT = timedelta(
     minutes=max(15.0, get_settings().deepseek_timeout_seconds * 10 / 60)
 )
+
+
+def _safe_json(value: str | None, *, default):
+    """Decode optional historical JSON without making detail read fail.
+
+    Older/load-test rows can have a blank or partially written report payload.
+    The database/query error itself must still propagate; only an optional
+    presentation blob is normalized here.
+    """
+
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return default
 
 # 三维状态的中文标签（CSV 导出与批次摘要使用）。
 VIEW_STATUS_LABELS = {"unviewed": "尚未查看", "viewed": "已经查看"}
@@ -90,6 +113,18 @@ class DiagnosticEmailResult:
 class LeadWordExport:
     document: bytes
     filename: str
+
+
+@dataclass(frozen=True)
+class LeadPdfExport:
+    document: bytes
+    filename: str
+
+
+@dataclass(frozen=True)
+class LeadPdfExportPrepareResult:
+    status: str
+    message: str
 
 
 @dataclass(frozen=True)
@@ -407,6 +442,117 @@ def export_lead_word(db: Session, user: User, lead_id: int) -> LeadWordExport:
     return LeadWordExport(document=document, filename=lead_word_filename(lead.company_name))
 
 
+def _exportable_report_for_lead(db: Session, lead_id: int) -> tuple[CompanyLead, Report]:
+    lead = lead_repo.get_lead_by_id(db, lead_id)
+    if not lead:
+        raise LeadNotFoundError("Lead not found")
+    submission = lead_repo.latest_submission_for_lead(db, lead.id)
+    report = submission.report if submission else None
+    if not report:
+        raise LeadReportNotFoundError("该线索还没有诊断报告，暂无法导出 PDF")
+    if report.status not in (ReportStatus.generated.value, ReportStatus.fallback.value) or not report.html_content:
+        raise LeadValidationError("客户诊断报告尚未生成完成，暂无法导出 PDF")
+    return lead, report
+
+
+def prepare_lead_pdf_export(
+    db: Session,
+    user: User,
+    lead_id: int,
+) -> LeadPdfExportPrepareResult:
+    lead, current_report = _exportable_report_for_lead(db, lead_id)
+    # Serialize prepare requests on the report so simultaneous clicks cannot
+    # create duplicate jobs in production databases.
+    report = (
+        db.query(Report)
+        .filter(Report.id == current_report.id)
+        .with_for_update()
+        .one()
+    )
+    if report.customer_pdf_bytes:
+        try:
+            validate_report_pdf_bytes(report.customer_pdf_bytes)
+        except ReportPdfValidationError:
+            report.customer_pdf_bytes = None
+        else:
+            db.commit()
+            return LeadPdfExportPrepareResult("ready", "客户版 PDF 已就绪")
+
+    active_task = (
+        db.query(ReportDeliveryJob)
+        .filter(
+            ReportDeliveryJob.report_id == report.id,
+            ReportDeliveryJob.task_kind == ReportTaskKind.pdf_export.value,
+            ReportDeliveryJob.status.in_((
+                ReportDeliveryStatus.queued.value,
+                ReportDeliveryStatus.processing.value,
+            )),
+        )
+        .order_by(ReportDeliveryJob.id.desc())
+        .first()
+    )
+    if active_task:
+        db.commit()
+        return LeadPdfExportPrepareResult(
+            active_task.status,
+            "客户版 PDF 正在生成，请稍候",
+        )
+
+    enqueue_report_delivery(
+        db,
+        report,
+        "",
+        task_kind=ReportTaskKind.pdf_export,
+    )
+    report.pdf_status = ReportFileStatus.pending.value
+    report.pdf_started_at = None
+    report.pdf_completed_at = None
+    write_operation_log(
+        db,
+        user,
+        "prepare_lead_pdf_export",
+        "lead",
+        str(lead.id),
+        {"report_id": report.id},
+    )
+    db.commit()
+    return LeadPdfExportPrepareResult("queued", "客户版 PDF 已加入生成队列")
+
+
+def download_lead_pdf_export(
+    db: Session,
+    user: User,
+    lead_id: int,
+) -> LeadPdfExport:
+    lead, report = _exportable_report_for_lead(db, lead_id)
+    pdf = report.customer_pdf_bytes
+    if not pdf:
+        raise LeadConflictError("客户版 PDF 尚未生成，请先准备导出")
+    try:
+        validate_report_pdf_bytes(pdf)
+    except ReportPdfValidationError as exc:
+        report.customer_pdf_bytes = None
+        db.commit()
+        raise LeadConflictError("已保存的客户版 PDF 无效，请重新准备导出") from exc
+    lead_repo.add_export_log(
+        db,
+        user_id=user.id,
+        export_type="lead_customer_pdf",
+        rows_count=1,
+        filters={"lead_id": lead.id, "report_id": report.id},
+    )
+    write_operation_log(
+        db,
+        user,
+        "export_lead_customer_pdf",
+        "lead",
+        str(lead.id),
+        {"report_id": report.id},
+    )
+    db.commit()
+    return LeadPdfExport(document=pdf, filename=customer_report_filename(report))
+
+
 def get_lead_detail(db: Session, lead_id: int, user: User | None = None) -> dict:
     lead = lead_repo.get_lead_by_id(db, lead_id)
     if not lead:
@@ -421,6 +567,12 @@ def get_lead_detail(db: Session, lead_id: int, user: User | None = None) -> dict
     submission = lead_repo.latest_submission_for_lead(db, lead.id)
     report = submission.report if submission else None
     delivery = lead_repo.latest_delivery_for_report(db, report.id) if report else None
+    queue_task = lead_repo.latest_report_task(db, report.id) if report else None
+    pdf_export_task = (
+        lead_repo.latest_report_task_for_kind(db, report.id, ReportTaskKind.pdf_export)
+        if report
+        else None
+    )
     queue_position = (
         lead_repo.queued_delivery_position(db, delivery.id)
         if delivery and delivery.status == "queued"
@@ -430,14 +582,21 @@ def get_lead_detail(db: Session, lead_id: int, user: User | None = None) -> dict
     if submission:
         dimensions = [
             {
-                "module_code": item.module.code,
-                "module_name": item.module.name,
+                "module_code": item.module.code if item.module else None,
+                "module_name": item.module.name if item.module else None,
                 "raw_score": item.raw_score,
                 "max_score": item.max_score,
                 "score_rate": item.score_rate,
                 "risk_level": item.risk_level,
             }
-            for item in sorted(submission.dimension_scores, key=lambda score: score.module.sort_order)
+            for item in sorted(
+                submission.dimension_scores,
+                key=lambda score: (
+                    getattr(score.module, "sort_order", 10_000),
+                    getattr(score.module, "code", "") or "",
+                    score.id,
+                ),
+            )
         ]
     advisor_messages = lead_repo.advisor_messages_for_report(db, report.id) if report else []
     return {
@@ -469,9 +628,12 @@ def get_lead_detail(db: Session, lead_id: int, user: User | None = None) -> dict
             "pdf_started_at": report.pdf_started_at,
             "pdf_completed_at": report.pdf_completed_at,
             "pdf_elapsed_seconds": elapsed_seconds(report.pdf_started_at, report.pdf_completed_at),
+            "customer_pdf_ready": bool(report.customer_pdf_bytes),
+            "customer_pdf_export_status": pdf_export_task.status if pdf_export_task else None,
+            "customer_pdf_export_error": pdf_export_task.last_error if pdf_export_task else None,
             "html_content": build_report_presentation_html(report.html_content, report.summary_json),
-            "summary": json.loads(report.summary_json or "{}"),
-            "company_research": json.loads(report.company_research_json) if report.company_research_json else None,
+            "summary": _safe_json(report.summary_json, default={}),
+            "company_research": _safe_json(report.company_research_json, default=None),
             "generation_error": report.generation_error,
             "created_at": report.created_at,
             "advisor_messages": [
@@ -498,7 +660,19 @@ def get_lead_detail(db: Session, lead_id: int, user: User | None = None) -> dict
                 delivery.sent_at or (delivery.updated_at if delivery.status == "failed" else None),
             ),
             "queue_position": queue_position,
+            "queue_state": delivery.queue_state,
+            "processing_stage": delivery.processing_stage,
+            "task_kind": delivery.task_kind,
         } if delivery else None,
+        "queue_task": {
+            "id": queue_task.id,
+            "status": queue_task.status,
+            "queue_state": queue_task.queue_state,
+            "processing_stage": queue_task.processing_stage,
+            "task_kind": queue_task.task_kind,
+            "run_after": queue_task.run_after,
+            "last_error": queue_task.last_error,
+        } if queue_task else None,
     }
 
 
@@ -528,9 +702,16 @@ def trigger_research(db: Session, user: User, lead_id: int, force: bool) -> Rese
     if not effective_search_config(db):
         raise LeadValidationError("联网搜索未启用，请先在「API 配置」页启用并保存搜索 Key")
     write_operation_log(db, user, "trigger_lead_research", "lead", str(lead.id))
-    report.research_status = CompanyResearchStatus.processing.value
-    report.research_started_at = utc_now()
+    report.research_status = CompanyResearchStatus.pending.value
+    report.research_started_at = None
     report.research_completed_at = None
+    enqueue_report_delivery(
+        db,
+        report,
+        "",
+        task_kind=ReportTaskKind.research_only,
+        task_context={"force": force},
+    )
     sync_lead_processing_status(db, lead.id)
     db.commit()
     message = "已开始重新检索企业信息，成功后会替换原结果" if force else "已开始联网检索企业信息，完成后会自动刷新"
@@ -588,6 +769,12 @@ def resume_report_delivery(db: Session, user: User, lead_id: int) -> ResumeDeliv
         delivery.last_error = None
         delivery.run_after = utc_now()
         delivery.locked_at = None
+        delivery.lock_token = None
+        delivery.queue_state = None
+        delivery.processing_stage = None
+        delivery.task_kind = ReportTaskKind.full_delivery.value
+        delivery.task_context_json = None
+        place_delivery_job_in_transaction(db, delivery.id)
     else:
         if not (lead.email or "").strip():
             raise LeadValidationError("客户邮箱为空，无法创建投递任务，请先更正诊断邮箱")
@@ -636,11 +823,21 @@ def retry_report_attachment_delivery(
         delivery.run_after = utc_now()
         delivery.locked_at = None
         delivery.lock_token = None
+        delivery.queue_state = None
+        delivery.processing_stage = None
+        delivery.task_kind = ReportTaskKind.attachment_delivery.value
+        delivery.task_context_json = None
+        place_delivery_job_in_transaction(db, delivery.id)
     else:
         recipient = (lead.email or "").strip()
         if not recipient:
             raise LeadValidationError("客户邮箱为空，无法发送附件，请先更正诊断邮箱")
-        delivery = enqueue_report_delivery(db, report, recipient)
+        delivery = enqueue_report_delivery(
+            db,
+            report,
+            recipient,
+            task_kind=ReportTaskKind.attachment_delivery,
+        )
     report.pdf_status = ReportFileStatus.pending.value
     report.pdf_started_at = None
     report.pdf_completed_at = None
@@ -678,6 +875,11 @@ def _active_delivery_exists(db: Session, report_id: int) -> bool:
             ReportDeliveryStatus.queued.value,
             ReportDeliveryStatus.processing.value,
         )),
+        ReportDeliveryJob.task_kind.in_((
+            ReportTaskKind.full_delivery.value,
+            ReportTaskKind.attachment_delivery.value,
+            ReportTaskKind.pdf_export.value,
+        )),
     ).first() is not None
 
 
@@ -708,6 +910,20 @@ def _regeneration_lease_matches(report: Report, generation_started_at: datetime)
         report.status == ReportStatus.generating.value
         and report.generation_started_at == generation_started_at
     )
+
+
+def _queue_lease_matches(
+    db: Session,
+    queue_job_id: int | None,
+    queue_lock_token: str | None,
+) -> bool:
+    if queue_job_id is None:
+        return True
+    return db.query(ReportDeliveryJob.id).filter(
+        ReportDeliveryJob.id == queue_job_id,
+        ReportDeliveryJob.status == ReportDeliveryStatus.processing.value,
+        ReportDeliveryJob.lock_token == queue_lock_token,
+    ).first() is not None
 
 
 def trigger_report_regeneration(
@@ -784,6 +1000,18 @@ def trigger_report_regeneration(
             "generation_started_at": now.isoformat(),
         },
     )
+    enqueue_report_delivery(
+        db,
+        report,
+        "",
+        task_kind=ReportTaskKind.content_regeneration,
+        task_context={
+            "user_id": user.id,
+            "previous_status": previous_status,
+            "generation_started_at": now.isoformat(),
+        },
+    )
+    sync_lead_processing_status(db, lead.id)
     db.commit()
     return ReportRegenerationResult(
         status="started",
@@ -806,6 +1034,9 @@ async def run_report_regeneration_task(
     user_id: int,
     previous_status: str = ReportStatus.generated.value,
     generation_started_at: datetime | None = None,
+    *,
+    queue_job_id: int | None = None,
+    queue_lock_token: str | None = None,
 ) -> None:
     """Build a candidate, then replace the report in one transaction on validated success."""
 
@@ -816,6 +1047,7 @@ async def run_report_regeneration_task(
             not report
             or generation_started_at is None
             or not _regeneration_lease_matches(report, generation_started_at)
+            or not _queue_lease_matches(db, queue_job_id, queue_lock_token)
         ):
             return
         async with report_generation_semaphore():
@@ -826,6 +1058,9 @@ async def run_report_regeneration_task(
         if not _regeneration_lease_matches(report, generation_started_at):
             db.rollback()
             return
+        if not _queue_lease_matches(db, queue_job_id, queue_lock_token):
+            db.rollback()
+            return
         if _active_delivery_exists(db, report.id):
             raise LeadValidationError("生成期间出现新的投递任务，已取消替换")
 
@@ -834,6 +1069,7 @@ async def run_report_regeneration_task(
         report.pdf_started_at = None
         report.pdf_completed_at = None
         report.pdf_path = None
+        report.customer_pdf_bytes = None
         user = db.get(User, user_id)
         write_operation_log(
             db,
@@ -852,6 +1088,7 @@ async def run_report_regeneration_task(
             report
             and generation_started_at is not None
             and _regeneration_lease_matches(report, generation_started_at)
+            and _queue_lease_matches(db, queue_job_id, queue_lock_token)
         ):
             report.status = _safe_previous_report_status(previous_status)
             report.generation_completed_at = utc_now()

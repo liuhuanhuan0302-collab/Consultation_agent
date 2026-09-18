@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, CaseStudy, ChannelSource, ExportBatch, GatewayConfig, Lead, LeadDetail, Question, QuestionModule, Report, ReportContactSettings, ScoreResponse, User } from "./types";
+import type { AnalyticsSummary, CaseStudy, ChannelSource, ExportBatch, GatewayConfig, Lead, LeadDetail, OrganizationAnswer, OrganizationCompanyDetailResponse, OrganizationCompanyListResponse, OrganizationCompanySuggestionResponse, OrganizationReportGenerationResponse, OrganizationSubmissionAdminDetail, OrganizationSubmissionCreated, OrganizationSubmissionCreate, OrganizationSubmissionRead, Question, QuestionModule, Report, ReportContactSettings, ReportQueueOverview, ReportQueueSettings, ScoreResponse, User } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -59,10 +59,43 @@ export type LeadQueryParams = {
   sort?: string;
 };
 
+export type OrganizationAdminCompanyParams = {
+  company_name?: string;
+  has_submitted?: boolean;
+  submitted_from?: string;
+  submitted_to?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export type OrganizationAdminSubmissionParams = {
+  department?: string;
+  respondent_name?: string;
+  status?: "draft" | "submitted";
+  submitted_from?: string;
+  submitted_to?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export type OrganizationAdminExportParams = Omit<OrganizationAdminSubmissionParams, "status"> & {
+  company_name?: string;
+  status?: "draft" | "submitted" | "all";
+};
+
 function leadQueryString(params: LeadQueryParams): string {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value) search.set(key, value);
+  });
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
+function organizationAdminQueryString(params: OrganizationAdminCompanyParams | OrganizationAdminSubmissionParams | OrganizationAdminExportParams): string {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") search.set(key, String(value));
   });
   const text = search.toString();
   return text ? `?${text}` : "";
@@ -80,6 +113,25 @@ export const api = {
       body: JSON.stringify({ event_name, session_token, lead_id, metadata })
     }),
   questions: () => request<QuestionModule[]>("/api/public/questions"),
+  organizationCompanySuggestions: (query: string, signal?: AbortSignal) =>
+    request<OrganizationCompanySuggestionResponse>(`/api/public/organization/company-suggestions?q=${encodeURIComponent(query)}`, { signal }),
+  createOrganizationSubmission: (payload: OrganizationSubmissionCreate) =>
+    request<OrganizationSubmissionCreated>("/api/public/organization/submissions", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  saveOrganizationAnswers: (submissionId: number, answers: OrganizationAnswer[], accessToken: string) =>
+    request<{ message: string }>(`/api/public/organization/submissions/${submissionId}/answers`, {
+      method: "PUT",
+      headers: { "X-Organization-Access-Token": accessToken },
+      body: JSON.stringify({ answers })
+    }),
+  submitOrganizationAnswers: (submissionId: number, answers: OrganizationAnswer[], accessToken: string) =>
+    request<OrganizationSubmissionRead>(`/api/public/organization/submissions/${submissionId}/submit`, {
+      method: "POST",
+      headers: { "X-Organization-Access-Token": accessToken },
+      body: JSON.stringify({ answers })
+    }),
   submitLead: (payload: Record<string, unknown>) =>
     request<{ lead: Lead; submission_id: number }>("/api/public/leads", {
       method: "POST",
@@ -113,6 +165,20 @@ export const api = {
   me: () => request<User>("/api/admin/me"),
   analytics: () => request<AnalyticsSummary>("/api/admin/analytics/summary"),
   leads: (params: LeadQueryParams = {}) => request<Lead[]>(`/api/admin/leads${leadQueryString(params)}`),
+  organizationAdminCompanies: (params: OrganizationAdminCompanyParams = {}) =>
+    request<OrganizationCompanyListResponse>(`/api/admin/organization/companies${organizationAdminQueryString(params)}`),
+  organizationAdminCompanySubmissions: (companyName: string, params: OrganizationAdminSubmissionParams = {}) =>
+    request<OrganizationCompanyDetailResponse>(`/api/admin/organization/companies/${encodeURIComponent(companyName)}/submissions${organizationAdminQueryString(params)}`),
+  organizationAdminSubmissionDetail: (submissionId: number) =>
+    request<OrganizationSubmissionAdminDetail>(`/api/admin/organization/submissions/${submissionId}`),
+  organizationAdminGenerateReport: (submissionId: number) =>
+    request<OrganizationReportGenerationResponse>(`/api/admin/organization/submissions/${submissionId}/reports`, {
+      method: "POST"
+    }),
+  organizationAdminReportPdf: (reportId: number) =>
+    downloadFile(`/api/admin/organization/reports/${reportId}/pdf`, `organization-report-${reportId}.pdf`),
+  organizationAdminExport: (params: OrganizationAdminExportParams = {}) =>
+    downloadFile(`/api/admin/organization/export${organizationAdminQueryString(params)}`, "organization-diagnosis.csv"),
   leadDetail: (leadId: number) => request<LeadDetail>(`/api/admin/leads/${leadId}`),
   triggerLeadResearch: (leadId: number, force = false) =>
     request<{ status: string; message?: string }>(`/api/admin/leads/${leadId}/research${force ? "?force=true" : ""}`, {
@@ -132,6 +198,13 @@ export const api = {
   deleteLead: (leadId: number) =>
     request<{ message: string }>(`/api/admin/leads/${leadId}`, { method: "DELETE" }),
   leadWordExport: (leadId: number) => downloadFile(`/api/admin/leads/${leadId}/export/word`, `lead-${leadId}.docx`),
+  prepareLeadPdfExport: (leadId: number) =>
+    request<{ status: "ready" | "queued" | "processing"; message: string }>(
+      `/api/admin/leads/${leadId}/export/pdf/prepare`,
+      { method: "POST" },
+    ),
+  leadPdfExport: (leadId: number) =>
+    downloadFile(`/api/admin/leads/${leadId}/export/pdf`, `lead-${leadId}.pdf`),
   leadsExport: (params: LeadQueryParams = {}) => downloadFile(`/api/admin/leads/export${leadQueryString(params)}`, "leads.csv"),
   exportUnexportedLeads: () =>
     request<{ batch_id: number | null; rows_count: number; message: string }>("/api/admin/leads/export-unexported", {
@@ -144,6 +217,23 @@ export const api = {
     request<ReportContactSettings>("/api/admin/system-settings/report-contact", {
       method: "PUT",
       body: JSON.stringify(payload)
+    }),
+  reportQueueSettings: () => request<ReportQueueSettings>("/api/admin/system-settings/report-queue"),
+  saveReportQueueSettings: (payload: Record<string, unknown>) =>
+    request<ReportQueueSettings>("/api/admin/system-settings/report-queue", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  reportQueueOverview: () => request<ReportQueueOverview>("/api/admin/system-settings/report-queue/overview"),
+  approveReportQueueJobs: (jobIds: number[]) =>
+    request<{ affected_job_ids: number[]; message: string }>("/api/admin/system-settings/report-queue/approve", {
+      method: "POST",
+      body: JSON.stringify({ job_ids: jobIds })
+    }),
+  rejectReportQueueJobs: (jobIds: number[], reason: string) =>
+    request<{ affected_job_ids: number[]; message: string }>("/api/admin/system-settings/report-queue/reject", {
+      method: "POST",
+      body: JSON.stringify({ job_ids: jobIds, reason })
     }),
   gatewayConfig: () => request<GatewayConfig>("/api/admin/api-gateway"),
   saveSearchConfig: (payload: Record<string, unknown>) =>

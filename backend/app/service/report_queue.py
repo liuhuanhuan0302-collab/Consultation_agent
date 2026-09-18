@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -14,7 +15,9 @@ from app.models import (
     ReportDeliveryJob,
     ReportDeliveryStatus,
     ReportFileStatus,
+    ReportQueueState,
     ReportStatus,
+    ReportTaskKind,
 )
 from app.service.company_research import research_company
 from app.service.email_service import send_report_pdf_email
@@ -26,6 +29,13 @@ from app.service.pdf_service import (
     report_public_url,
 )
 from app.service.reporting import generate_report_content, report_generation_semaphore
+from app.service.report_queue_scheduler import (
+    acquire_pdf_slot,
+    claim_next_job_locked,
+    finish_job,
+    place_delivery_job_in_transaction,
+    promote_waiting_jobs,
+)
 from app.utils.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -43,10 +53,22 @@ STALE_PROCESSING_TIMEOUT = timedelta(
 )
 
 
-def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -> ReportDeliveryJob:
+def enqueue_report_delivery(
+    db: Session,
+    report: Report,
+    recipient_email: str,
+    *,
+    task_kind: ReportTaskKind | str = ReportTaskKind.full_delivery,
+    task_context: dict | None = None,
+) -> ReportDeliveryJob:
     """创建或复用报告发送任务，提交接口只负责入队，不等待 AI 和邮件。"""
     normalized_email = (recipient_email or "").strip().lower()
-    if not normalized_email:
+    kind = task_kind.value if isinstance(task_kind, ReportTaskKind) else str(task_kind)
+    delivery_kinds = {
+        ReportTaskKind.full_delivery.value,
+        ReportTaskKind.attachment_delivery.value,
+    }
+    if kind in delivery_kinds and not normalized_email:
         raise ValueError("报告接收邮箱为空，无法加入发送队列")
 
     existing = (
@@ -54,12 +76,14 @@ def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -
         .filter(
             ReportDeliveryJob.report_id == report.id,
             ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
+            ReportDeliveryJob.task_kind == kind,
         )
         .first()
     )
     if existing:
         existing.recipient_email = normalized_email
         existing.run_after = utc_now()
+        existing.task_context_json = json.dumps(task_context, ensure_ascii=False) if task_context else None
         return existing
 
     # processing 中的任务已不在候选之列：worker 读取收件人发生在领取之后，
@@ -71,10 +95,13 @@ def enqueue_report_delivery(db: Session, report: Report, recipient_email: str) -
         report_id=report.id,
         recipient_email=normalized_email,
         status=ReportDeliveryStatus.queued.value,
+        task_kind=kind,
+        task_context_json=json.dumps(task_context, ensure_ascii=False) if task_context else None,
         run_after=utc_now(),
     )
     db.add(job)
     db.flush()
+    place_delivery_job_in_transaction(db, job.id)
     return job
 
 
@@ -86,24 +113,8 @@ def claim_next_job(db: Session) -> ReportDeliveryJob | None:
     重复发送邮件。
     """
     _reclaim_stale_jobs(db)
-    now = utc_now()
-
-    while True:
-        candidate_id = (
-            db.query(ReportDeliveryJob.id)
-            .filter(
-                ReportDeliveryJob.status == ReportDeliveryStatus.queued.value,
-                ReportDeliveryJob.run_after <= now,
-                ReportDeliveryJob.attempts < ReportDeliveryJob.max_attempts,
-            )
-            .order_by(ReportDeliveryJob.created_at.asc())
-            .limit(1)
-            .scalar()
-        )
-        if not candidate_id:
-            return None
-        if _try_claim_job(db, candidate_id, now):
-            return db.get(ReportDeliveryJob, candidate_id)
+    promote_waiting_jobs(db)
+    return claim_next_job_locked(db, at=utc_now())
 
 
 def _reclaim_stale_jobs(db: Session) -> int:
@@ -148,6 +159,11 @@ def _reclaim_stale_jobs(db: Session) -> int:
             run_after=now,
             locked_at=None,
             lock_token=None,
+            processing_stage=None,
+            queue_state=case(
+                (exhausted, ReportQueueState.manual_review.value),
+                else_=ReportQueueState.active.value,
+            ),
         )
     )
     db.commit()
@@ -230,6 +246,20 @@ def _touch_lease(db: Session, job_id: int, lock_token: str) -> int:
     return rowcount
 
 
+def _set_processing_stage(db: Session, job_id: int, lock_token: str, stage: str) -> bool:
+    rowcount = db.execute(
+        update(ReportDeliveryJob)
+        .where(
+            ReportDeliveryJob.id == job_id,
+            ReportDeliveryJob.status == ReportDeliveryStatus.processing.value,
+            ReportDeliveryJob.lock_token == lock_token,
+        )
+        .values(processing_stage=stage)
+    ).rowcount
+    db.commit()
+    return rowcount == 1
+
+
 async def _heartbeat_loop(job_id: int, lock_token: str, stop_event: asyncio.Event) -> None:
     """租约续约循环：任务执行期间定时刷新 locked_at。
 
@@ -256,7 +286,7 @@ async def _heartbeat_loop(job_id: int, lock_token: str, stop_event: asyncio.Even
 
 
 async def process_report_delivery_job(job_id: int) -> bool:
-    """生成报告、渲染 PDF 并发送邮件。返回 True 表示任务完成。"""
+    """执行报告任务；PDF 导出任务只渲染并持久化，不发送邮件。"""
     db = SessionLocal()
     stage = "initializing"
     heartbeat_task: asyncio.Task | None = None
@@ -274,12 +304,85 @@ async def process_report_delivery_job(job_id: int) -> bool:
 
         report = db.query(Report).filter(Report.id == job.report_id).first()
         if not report:
-            job.status = ReportDeliveryStatus.failed.value
-            job.last_error = "报告不存在"
-            job.locked_at = None
-            job.lock_token = None
+            completed = finish_job(
+                db,
+                job_id,
+                lock_token,
+                status=ReportDeliveryStatus.failed.value,
+                error="报告不存在",
+            )
+            return True
+
+        task_kind = str(job.task_kind or ReportTaskKind.full_delivery.value)
+        context = json.loads(job.task_context_json) if job.task_context_json else {}
+
+        if task_kind == ReportTaskKind.research_only.value:
+            stage = "research"
+            if not _set_processing_stage(db, job_id, lock_token, stage):
+                return False
+            report.research_status = CompanyResearchStatus.processing.value
+            report.research_started_at = utc_now()
+            db.commit()
+            result = await research_company(db, report, force=bool(context.get("force")))
+            if not result:
+                raise RuntimeError(report.generation_error or "公司情报检索失败")
+            finish_job(
+                db,
+                job_id,
+                lock_token,
+                status=ReportDeliveryStatus.cancelled.value,
+            )
+            sync_lead_processing_status(db, job.lead_id)
             db.commit()
             return True
+
+        if task_kind == ReportTaskKind.content_regeneration.value:
+            stage = "report"
+            if not _set_processing_stage(db, job_id, lock_token, stage):
+                return False
+            db.commit()
+            from app.service.lead_service import run_report_regeneration_task
+
+            started = context.get("generation_started_at")
+            generation_started_at = datetime.fromisoformat(started) if started else None
+            if generation_started_at is None:
+                raise RuntimeError("内容重生成任务缺少租约时间")
+            if not (
+                report.status == ReportStatus.generating.value
+                and report.generation_started_at == generation_started_at
+            ):
+                report.status = ReportStatus.generating.value
+                report.generation_started_at = generation_started_at
+                report.generation_completed_at = None
+                report.generation_error = None
+                db.commit()
+            await run_report_regeneration_task(
+                report.id,
+                context.get("user_id"),
+                context.get("previous_status", ReportStatus.generated.value),
+                generation_started_at,
+                queue_job_id=job_id,
+                queue_lock_token=lock_token,
+            )
+            db.expire_all()
+            current_report = db.get(Report, report.id)
+            error = current_report.generation_error if current_report else "报告不存在"
+            if current_report is None or error:
+                raise RuntimeError(error or "AI 报告重新生成失败")
+            completed = finish_job(
+                db,
+                job_id,
+                lock_token,
+                status=ReportDeliveryStatus.cancelled.value,
+                error=None,
+            )
+            if completed:
+                sync_lead_processing_status(db, job.lead_id)
+                db.commit()
+            return current_report is not None and current_report.status in (
+                ReportStatus.generated.value,
+                ReportStatus.fallback.value,
+            )
 
         if stop_event.is_set():
             return False
@@ -288,8 +391,20 @@ async def process_report_delivery_job(job_id: int) -> bool:
             ReportStatus.generated.value,
             ReportStatus.fallback.value,
         )
-        if not (report.status in reusable_report_statuses and report.html_content):
+        reuse_only_task_kinds = {
+            ReportTaskKind.attachment_delivery.value,
+            ReportTaskKind.pdf_export.value,
+        }
+        if task_kind in reuse_only_task_kinds and not (
+            report.status in reusable_report_statuses and report.html_content
+        ):
+            raise RuntimeError("当前没有可导出的完整 AI 报告")
+        if task_kind not in reuse_only_task_kinds and not (
+            report.status in reusable_report_statuses and report.html_content
+        ):
             stage = "research"
+            if not _set_processing_stage(db, job_id, lock_token, stage):
+                return False
             report.status = ReportStatus.pending.value
             report.research_status = CompanyResearchStatus.processing.value
             report.research_started_at = utc_now()
@@ -302,29 +417,39 @@ async def process_report_delivery_job(job_id: int) -> bool:
                 return False
             if not research:
                 error = report.generation_error or "公司情报检索暂时失败"
-                job.locked_at = None
-                job.lock_token = None
                 if job.attempts < job.max_attempts:
                     delay_minutes = max(2, 2 * job.attempts)
                     report.status = ReportStatus.pending.value
                     report.research_status = CompanyResearchStatus.pending.value
-                    job.status = ReportDeliveryStatus.queued.value
-                    job.run_after = utc_now() + timedelta(minutes=delay_minutes)
-                    job.last_error = f"{error}；将在 {delay_minutes} 分钟后自动重试"
+                    next_status = ReportDeliveryStatus.queued.value
+                    run_after = utc_now() + timedelta(minutes=delay_minutes)
+                    next_error = f"{error}；将在 {delay_minutes} 分钟后自动重试"
                 else:
                     report.status = ReportStatus.failed.value
                     report.research_status = CompanyResearchStatus.review.value
                     report.generation_error = f"{error}；自动重试已耗尽，待人工审核"
-                    job.status = ReportDeliveryStatus.failed.value
-                    job.last_error = report.generation_error
-                sync_lead_processing_status(db, job.lead_id)
+                    next_status = ReportDeliveryStatus.failed.value
+                    run_after = None
+                    next_error = report.generation_error
                 db.commit()
+                if finish_job(
+                    db,
+                    job_id,
+                    lock_token,
+                    status=next_status,
+                    error=next_error,
+                    run_after=run_after,
+                ):
+                    sync_lead_processing_status(db, job.lead_id)
+                    db.commit()
                 return False
             report.status = ReportStatus.generating.value
             report.generation_started_at = utc_now()
             db.commit()
             async with report_generation_semaphore():
                 stage = "report"
+                if not _set_processing_stage(db, job_id, lock_token, stage):
+                    return False
                 await generate_report_content(db, report)
             # 报告生成与邮件投递是两个独立结果。先固化报告，避免 SMTP/PDF
             # 失败时异常回滚掉已生成内容，导致客户永久停留在“生成中”。
@@ -335,21 +460,36 @@ async def process_report_delivery_job(job_id: int) -> bool:
                 # 故障自动恢复，而不是直接转人工处理。情报已缓存，重试会
                 # 复用证据直接重新生成。
                 error = report.generation_error or "报告内容不完整，待人工审核"
-                job.locked_at = None
-                job.lock_token = None
                 if job.attempts < job.max_attempts:
                     delay_minutes = max(2, 2 * job.attempts)
                     report.status = ReportStatus.pending.value
-                    job.status = ReportDeliveryStatus.queued.value
-                    job.run_after = utc_now() + timedelta(minutes=delay_minutes)
-                    job.last_error = f"{error}；将在 {delay_minutes} 分钟后自动重试"
+                    next_status = ReportDeliveryStatus.queued.value
+                    run_after = utc_now() + timedelta(minutes=delay_minutes)
+                    next_error = f"{error}；将在 {delay_minutes} 分钟后自动重试"
                 else:
                     report.status = ReportStatus.failed.value
-                    job.status = ReportDeliveryStatus.failed.value
-                    job.last_error = f"{error}；自动重试已耗尽，待人工审核"
-                sync_lead_processing_status(db, job.lead_id)
+                    next_status = ReportDeliveryStatus.failed.value
+                    run_after = None
+                    next_error = f"{error}；自动重试已耗尽，待人工审核"
                 db.commit()
+                if finish_job(
+                    db,
+                    job_id,
+                    lock_token,
+                    status=next_status,
+                    error=next_error,
+                    run_after=run_after,
+                ):
+                    sync_lead_processing_status(db, job.lead_id)
+                    db.commit()
                 return False
+        stage = "waiting_pdf"
+        if not _set_processing_stage(db, job_id, lock_token, stage):
+            return False
+        while not acquire_pdf_slot(db, job_id, lock_token):
+            if stop_event.is_set():
+                return False
+            await asyncio.sleep(0.25)
         stage = "pdf"
         report.pdf_status = ReportFileStatus.processing.value
         report.pdf_started_at = utc_now()
@@ -361,8 +501,25 @@ async def process_report_delivery_job(job_id: int) -> bool:
         db.commit()
         if stop_event.is_set():
             return False
+        if task_kind == ReportTaskKind.pdf_export.value:
+            stage = "persisting_pdf"
+            if not _set_processing_stage(db, job_id, lock_token, stage):
+                return False
+            # finish_job verifies and locks the queue lease before committing.
+            # Keeping this assignment uncommitted makes artifact publication
+            # and the terminal transition one lease-fenced transaction.
+            report.customer_pdf_bytes = pdf
+            completed = finish_job(
+                db,
+                job_id,
+                lock_token,
+                status=ReportDeliveryStatus.cancelled.value,
+            )
+            return bool(completed)
         report_url = report_public_url(report)
         stage = "email"
+        if not _set_processing_stage(db, job_id, lock_token, stage):
+            return False
         # 发邮件前最后确认租约仍归本执行者所有：心跳停止期间被回收的任务
         # 不得再发送邮件，防止同一任务被重复投递。
         db.expire_all()
@@ -379,6 +536,9 @@ async def process_report_delivery_job(job_id: int) -> bool:
         )
 
         # 终态写入同样是条件更新：租约已丢失时不覆盖新执行者的结果。
+        # customer_pdf_bytes 与邮件调用接收的是同一个局部 pdf 对象，确保
+        # 管理员后来下载的客户版 PDF 与实际发送的附件逐字节一致。
+        report.customer_pdf_bytes = pdf
         updated = db.execute(
             update(ReportDeliveryJob)
             .where(
@@ -392,12 +552,16 @@ async def process_report_delivery_job(job_id: int) -> bool:
                 locked_at=None,
                 lock_token=None,
                 last_error=None,
+                queue_state=None,
+                processing_stage=None,
             )
         ).rowcount
-        db.commit()
         if updated != 1:
+            db.rollback()
             logger.warning("租约已失效，发送结果未写入: job_id=%s", job_id)
             return False
+        db.commit()
+        promote_waiting_jobs(db)
         sync_lead_processing_status(db, job.lead_id)
         db.commit()
         return True
@@ -416,6 +580,7 @@ async def process_report_delivery_job(job_id: int) -> bool:
             else None
         )
         if job:
+            lead_id = job.lead_id
             report = db.query(Report).filter(Report.id == job.report_id).first()
             if report and stage == "pdf":
                 report.pdf_status = ReportFileStatus.failed.value
@@ -426,23 +591,37 @@ async def process_report_delivery_job(job_id: int) -> bool:
                 "pdf": "PDF 生成或校验失败",
                 "email": "邮件发送失败",
             }
-            job.last_error = f"{stage_labels.get(stage, '报告任务失败')}：{exc}"
-            terminal_attachment_failure = stage == "pdf" and isinstance(exc, CustomerPdfConversionError)
+            next_error = f"{stage_labels.get(stage, '报告任务失败')}：{exc}"
+            terminal_attachment_failure = (
+                task_kind != ReportTaskKind.pdf_export.value
+                and stage == "pdf"
+                and isinstance(exc, CustomerPdfConversionError)
+            )
             if terminal_attachment_failure:
-                job.status = ReportDeliveryStatus.failed.value
-                job.last_error = (
+                next_status = ReportDeliveryStatus.failed.value
+                run_after = None
+                next_error = (
                     "PDF 附件生成失败：Word→PDF 已连续尝试 3 次，未发送邮件，已转人工处理；"
                     "请修复服务器转换环境后点击“重新生成附件并发送”"
                 )
             elif job.attempts >= job.max_attempts:
-                job.status = ReportDeliveryStatus.failed.value
+                next_status = ReportDeliveryStatus.failed.value
+                run_after = None
             else:
-                job.status = ReportDeliveryStatus.queued.value
-                job.run_after = utc_now() + timedelta(minutes=2 * job.attempts)
-            job.locked_at = None
-            job.lock_token = None
-            sync_lead_processing_status(db, job.lead_id)
+                next_status = ReportDeliveryStatus.queued.value
+                run_after = utc_now() + timedelta(minutes=2 * job.attempts)
             db.commit()
+            if finish_job(
+                db,
+                job_id,
+                lock_token,
+                status=next_status,
+                error=next_error,
+                run_after=run_after,
+            ):
+                if task_kind != ReportTaskKind.pdf_export.value:
+                    sync_lead_processing_status(db, lead_id)
+                    db.commit()
         else:
             logger.warning("租约已失效，失败状态未写入: job_id=%s", job_id)
         return False
@@ -457,38 +636,17 @@ async def process_report_delivery_job(job_id: int) -> bool:
         db.close()
 
 
-async def process_next_report_delivery() -> bool:
-    """领取并处理一条报告任务，供 Web 请求结束后的后台任务调用。"""
-    db = SessionLocal()
-    try:
-        job = claim_next_job(db)
-    finally:
-        db.close()
-    if not job:
-        return False
-    return await process_report_delivery_job(job.id)
-
-
-async def process_job_then_next(job_id: int | None) -> None:
-    """提交接口的后台任务：优先处理本次提交产生的任务，再继续消费队列。
-
-    先通过条件 UPDATE 原子认领目标任务——若持续运行的 worker 已抢先领取，
-    则跳过直接消费队列，避免同一任务被重复生成报告、重复发送邮件。
-    """
-    if job_id is not None:
-        db = SessionLocal()
-        try:
-            claimed = _try_claim_job(db, job_id, utc_now())
-        finally:
-            db.close()
-        if claimed:
-            await process_report_delivery_job(job_id)
-    await process_next_report_delivery()
-
-
 async def run_report_delivery_worker(poll_interval_seconds: float = 2.0) -> None:
-    """持续消费报告发送队列。部署时作为单独进程启动。"""
+    """Dynamic independent supervisor; database claims enforce global limits."""
+    running: set[asyncio.Task] = set()
     while True:
+        finished = {task for task in running if task.done()}
+        for task in finished:
+            try:
+                task.result()
+            except Exception:
+                logger.exception("报告 worker 子任务异常")
+        running -= finished
         db = SessionLocal()
         try:
             job = claim_next_job(db)
@@ -497,4 +655,4 @@ async def run_report_delivery_worker(poll_interval_seconds: float = 2.0) -> None
         if not job:
             await asyncio.sleep(poll_interval_seconds)
             continue
-        await process_report_delivery_job(job.id)
+        running.add(asyncio.create_task(process_report_delivery_job(job.id)))

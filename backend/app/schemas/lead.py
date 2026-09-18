@@ -93,3 +93,8 @@ class LeadCreatedResponse(BaseModel):
 
 class LeadDiagnosticEmailUpdate(BaseModel):
     email: EmailStr = Field(description="更正后的诊断报告接收邮箱")
+
+
+class LeadPdfExportPrepareResponse(BaseModel):
+    status: str = Field(description="PDF 导出状态：ready/queued/processing")
+    message: str

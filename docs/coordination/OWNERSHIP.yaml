@@ -2,6 +2,380 @@ version: 1
 policy: single-writer
 orchestrator: codex
 active_leases:
+  - lease_id: lease-turn-0039
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0039
+    issue_id: I-226
+    writer: delegated_local_launcher_worker
+    status: released
+    owned_paths:
+      - backend/scripts/start_dev.py
+      - backend/tests/test_start_dev.py
+      - README.md
+      - PROJECT_OVERVIEW.md
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0039-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - docker-compose.yml
+      - deploy/**
+      - backend/app/**
+      - backend/migrations/**
+      - frontend/**
+      - official-website/**
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0038
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0038
+    issue_id: I-225
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - backend/ARCHITECTURE.md
+      - backend/app/api/v1/endpoints/admin/__init__.py
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/models/__init__.py
+      - backend/app/models/report.py
+      - backend/app/repositories/lead_repo.py
+      - backend/app/schemas/__init__.py
+      - backend/app/schemas/lead.py
+      - backend/app/service/lead_service.py
+      - backend/app/service/report_queue.py
+      - backend/migrations/versions/e3f7a9c2d501_store_customer_pdf_exports.py
+      - backend/tests/test_authorization_matrix.py
+      - backend/tests/test_customer_pdf_export.py
+      - backend/tests/test_migration_chain.py
+      - backend/tests/test_pdf_delivery_gate.py
+      - frontend/src/App.vue
+      - frontend/src/api.ts
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/types.ts
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0038-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/app/api/v1/endpoints/public.py
+      - backend/app/main.py
+      - backend/app/service/pdf_service.py
+      - backend/app/service/email_service.py
+      - backend/app/service/lead_export_service.py
+      - backend/app/service/report_queue_scheduler.py
+      - frontend/src/styles.css
+      - frontend/src/components/**
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0037
+  - lease_id: lease-turn-0037
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0037
+    issue_id: I-224
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0037-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0036
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0036
+    issue_id: I-224
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0036-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0035
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0035
+    issue_id: I-223
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - frontend/src/composables/useOrganizationAdmin.ts
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0035-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0034
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0034
+    issue_id: I-222
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0034-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0033
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0033
+    issue_id: I-221
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0033-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0032
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0032
+    issue_id: I-220
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0032-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0031
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0031
+    issue_id: I-220
+    writer: delegated_org_ui_worker
+    status: released
+    owned_paths:
+      - frontend/src/components/OrganizationDiagnosisAdmin.vue
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0031-handoff.md
+    forbidden_paths:
+      - backend/**
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - frontend/src/api.ts
+      - frontend/src/types.ts
+      - frontend/src/composables/**
+      - frontend/src/components/OrganizationSubmissionDetail.vue
+      - AGENTS.md
+      - docs/coordination/PROTOCOL.md
+      - docs/coordination/SPEC.md
+      - docs/coordination/MILESTONES.md
+      - docs/coordination/DAG.yaml
+      - docs/coordination/STATE.json
+      - docs/coordination/OWNERSHIP.yaml
+  - lease_id: lease-turn-0030
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0030
+    issue_id: I-210
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/migrations/versions/a4d7c9e2f601_add_report_queue_scheduler.py
+      - backend/migrations/versions/c8e1f4a7b203_add_report_queue_task_kinds.py
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/service/lead_service.py
+      - backend/app/repositories/lead_repo.py
+      - backend/app/schemas/lead.py
+      - backend/tests/test_lead_service.py
+      - backend/tests/test_lead_tracking.py
+      - backend/tests/test_migration_chain.py
+      - backend/tests/test_admin_lead_detail_compatibility.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0029-handoff.md
+      - docs/coordination/outbox/TURN-0030-handoff.md
+    forbidden_paths:
+      - frontend/**
+      - backend/app/models/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/report_queue_scheduler.py
+      - AGENTS.md
+  - lease_id: lease-turn-0028
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0028
+    issue_id: I-200
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/admin/system_settings.py
+      - backend/app/schemas/system_setting.py
+      - backend/app/service/system_setting_service.py
+      - backend/app/repositories/system_setting_repo.py
+      - backend/app/repositories/report_queue_repo.py
+      - backend/app/service/report_queue_scheduler.py
+      - backend/tests/test_system_settings.py
+      - backend/tests/test_report_queue_scheduler.py
+      - backend/tests/test_authorization_matrix.py
+      - frontend/src/types.ts
+      - frontend/src/api.ts
+      - frontend/src/composables/useAdmin.ts
+      - frontend/src/App.vue
+      - frontend/src/styles.css
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0028-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/app/models/**
+      - backend/app/service/report_queue.py
+      - backend/migrations/**
+      - backend/app/api/v1/endpoints/public.py
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/main.py
+      - backend/app/core/**
+      - backend/app/service/pdf_service.py
+      - official-website/**
+  - lease_id: lease-turn-0027
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0027
+    issue_id: I-190
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/api/v1/endpoints/public.py
+      - backend/app/api/v1/endpoints/admin/leads.py
+      - backend/app/main.py
+      - backend/app/models/report.py
+      - backend/app/models/__init__.py
+      - backend/app/repositories/report_queue_repo.py
+      - backend/app/repositories/lead_repo.py
+      - backend/app/repositories/submission_repo.py
+      - backend/app/service/report_queue_scheduler.py
+      - backend/app/service/report_queue.py
+      - backend/app/service/submission_service.py
+      - backend/app/service/lead_service.py
+      - backend/app/service/lead_status.py
+      - backend/scripts/report_worker.py
+      - backend/ARCHITECTURE.md
+      - backend/migrations/versions/*_add_report_queue_task_kinds.py
+      - backend/tests/test_submission_service.py
+      - backend/tests/test_lead_service.py
+      - backend/tests/test_lead_tracking.py
+      - backend/tests/test_report_queue_claim.py
+      - backend/tests/test_pdf_delivery_gate.py
+      - backend/tests/test_migration_chain.py
+      - backend/tests/test_report_queue_http_isolation.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0027-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/app/core/**
+      - backend/app/schemas/**
+      - backend/app/service/pdf_service.py
+      - frontend/**
+      - official-website/**
+  - lease_id: lease-turn-0026
+    run_id: backend-architecture-hardening-20260822
+    turn_id: TURN-0026
+    issue_id: I-180
+    writer: claude_code
+    status: released
+    owned_paths:
+      - backend/app/models/report.py
+      - backend/app/models/system_setting.py
+      - backend/app/models/__init__.py
+      - backend/app/repositories/report_queue_repo.py
+      - backend/app/repositories/system_setting_repo.py
+      - backend/app/service/report_queue_scheduler.py
+      - backend/migrations/versions/*_add_report_queue_scheduler.py
+      - backend/tests/test_report_queue_scheduler.py
+      - backend/tests/test_migration_chain.py
+      - docs/coordination/DEVELOPMENT_LOG.md
+      - docs/coordination/outbox/TURN-0026-handoff.md
+    forbidden_paths:
+      - AGENTS.md
+      - backend/app/api/**
+      - backend/app/core/**
+      - backend/app/schemas/**
+      - backend/app/service/report_queue.py
+      - backend/app/service/submission_service.py
+      - backend/scripts/**
+      - frontend/**
+      - official-website/**
   - lease_id: lease-turn-0025
     run_id: backend-architecture-hardening-20260822
     turn_id: TURN-0025

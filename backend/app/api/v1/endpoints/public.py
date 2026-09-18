@@ -14,14 +14,14 @@
 import json
 from datetime import timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from slowapi import Limiter
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.models import ChannelSource, CompanyLead, DiagnosisSubmission, Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus, SubmissionStatus
+from app.models import ChannelSource, CompanyLead, DiagnosisSubmission, Report, ReportDeliveryJob, ReportDeliveryStatus, ReportStatus, ReportTaskKind, SubmissionStatus
 from app.repositories.consult_repo import (
     get_lead_by_session,
     get_report_by_public_token,
@@ -44,8 +44,8 @@ from app.schemas import (
     TrackEventRequest,
 )
 from app.service import submission_service
-from app.service.report_queue import process_job_then_next
-from app.service.reporting import regenerate_report_content_for_testing
+from app.service.lead_status import sync_lead_processing_status
+from app.service.report_queue import enqueue_report_delivery
 from app.service.report_content import build_report_presentation_html
 from app.utils.logging_utils import write_tracking_event
 from app.utils.qr_code import generate_qr_png
@@ -324,7 +324,6 @@ def save_draft(
 async def submit_questionnaire(
     payload: SubmitQuestionnaireRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     submission: DiagnosisSubmission = Depends(get_submission_for_session),
     db: Session = Depends(get_db),
 ) -> SubmitResponse:
@@ -344,12 +343,9 @@ async def submit_questionnaire(
         raise HTTPException(status_code=409, detail=exc.detail) from exc
     except submission_service.SubmissionValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc
-    except submission_service.SubmissionQueueCapacityError as exc:
-        raise HTTPException(status_code=503, detail=exc.detail) from exc
 
     score = result.score
     report = result.report
-    background_tasks.add_task(process_job_then_next, result.delivery_job_id)
     return SubmitResponse(
         score=score,
         report={
@@ -388,7 +384,13 @@ def submission_report_status(
     # 客户只需要任务状态；具体队列位置仅在后台展示，避免暴露系统负载。
     delivery = (
         db.query(ReportDeliveryJob)
-        .filter(ReportDeliveryJob.report_id == report.id)
+        .filter(
+            ReportDeliveryJob.report_id == report.id,
+            ReportDeliveryJob.task_kind.in_((
+                ReportTaskKind.full_delivery.value,
+                ReportTaskKind.attachment_delivery.value,
+            )),
+        )
         .order_by(ReportDeliveryJob.id.desc())
         .first()
     )
@@ -466,7 +468,25 @@ async def regenerate_report_for_local_testing(public_token: str, request: Reques
     report = get_report_by_public_token(db, public_token)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    await regenerate_report_content_for_testing(db, report)
+    if report.status not in (ReportStatus.generated.value, ReportStatus.fallback.value):
+        raise HTTPException(status_code=409, detail="Report is not ready for regeneration")
+    previous_status = report.status
+    started_at = utc_now().replace(microsecond=0)
+    report.status = ReportStatus.generating.value
+    report.generation_started_at = started_at
+    enqueue_report_delivery(
+        db,
+        report,
+        "",
+        task_kind=ReportTaskKind.content_regeneration,
+        task_context={
+            "user_id": None,
+            "previous_status": previous_status,
+            "generation_started_at": started_at.isoformat(),
+        },
+    )
+    sync_lead_processing_status(db, report.submission.lead_id)
+    db.commit()
     return serialize_public_report(report)
 
 

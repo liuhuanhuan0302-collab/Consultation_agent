@@ -2,10 +2,10 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints.admin import analytics, api_gateway, auth, cases, channels, leads, questions, reports, system_settings, users
+from app.api.v1.endpoints.admin import analytics, api_gateway, auth, cases, channels, leads, organization, questions, reports, system_settings, users
 
 router = APIRouter()
-for submodule in (auth, users, leads, reports, questions, cases, channels, analytics, api_gateway, system_settings):
+for submodule in (auth, users, leads, organization, reports, questions, cases, channels, analytics, api_gateway, system_settings):
     router.include_router(submodule.router)
 
 # 兼容既有导入路径（如 backend/tests 中的 from app.api.v1.endpoints.admin import xxx）
@@ -29,6 +29,12 @@ from app.api.v1.endpoints.admin.leads import (  # noqa: E402
     export_lead_word,
     export_leads,
     update_lead_diagnostic_email,
+)
+from app.api.v1.endpoints.admin.organization import (  # noqa: E402
+    admin_export_organization,
+    admin_get_organization_submission,
+    admin_list_organization_companies,
+    admin_list_organization_submissions,
 )
 from app.api.v1.endpoints.admin.questions import (  # noqa: E402
     admin_list_questions,
